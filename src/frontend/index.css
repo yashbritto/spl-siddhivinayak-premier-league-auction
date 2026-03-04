@@ -4,21 +4,21 @@
 
 @font-face {
   font-family: "Bricolage Grotesque";
-  src: url("/assets/fonts/BricolageGrotesque.woff2") format("woff2");
+  src: url("/assets/fonts/BricolageGrotesque[opsz,wdth,wght].woff2") format("woff2");
   font-weight: 100 900;
   font-display: swap;
 }
 
 @font-face {
   font-family: "Geist Mono";
-  src: url("/assets/fonts/GeistMono.woff2") format("woff2");
+  src: url("/assets/fonts/GeistMono[wght].woff2") format("woff2");
   font-weight: 100 900;
   font-display: swap;
 }
 
 @font-face {
-  font-family: "Mona Sans";
-  src: url("/assets/fonts/MonaSans.woff2") format("woff2");
+  font-family: "General Sans";
+  src: url("/assets/fonts/GeneralSans[wght].woff2") format("woff2");
   font-weight: 100 900;
   font-display: swap;
 }
@@ -28,50 +28,50 @@
     --radius: 0.25rem;
 
     /* SPL Dark Navy + Gold Palette — always dark */
-    --background: 0.08 0.025 265;
-    --foreground: 0.96 0.015 90;
-    --card: 0.11 0.03 265;
-    --card-foreground: 0.96 0.015 90;
-    --popover: 0.13 0.035 265;
-    --popover-foreground: 0.96 0.015 90;
+    --background: 0.1 0.02 255;
+    --foreground: 0.96 0.01 90;
+    --card: 0.13 0.025 255;
+    --card-foreground: 0.96 0.01 90;
+    --popover: 0.14 0.03 255;
+    --popover-foreground: 0.96 0.01 90;
 
     /* Gold primary */
     --primary: 0.78 0.165 85;
-    --primary-foreground: 0.08 0.025 265;
+    --primary-foreground: 0.1 0.02 255;
 
     /* Deep navy secondary */
-    --secondary: 0.14 0.04 265;
+    --secondary: 0.16 0.03 255;
     --secondary-foreground: 0.85 0.02 90;
 
-    --muted: 0.15 0.03 265;
+    --muted: 0.2 0.02 255;
     --muted-foreground: 0.55 0.02 90;
 
     /* Amber accent */
-    --accent: 0.82 0.18 75;
-    --accent-foreground: 0.08 0.025 265;
+    --accent: 0.78 0.165 85;
+    --accent-foreground: 0.1 0.02 255;
 
     --destructive: 0.62 0.22 25;
     --destructive-foreground: 0.98 0 0;
 
-    --border: 0.22 0.04 265;
-    --input: 0.18 0.04 265;
+    --border: 0.25 0.03 255;
+    --input: 0.2 0.03 255;
     --ring: 0.78 0.165 85;
 
     /* Chart colors */
     --chart-1: 0.78 0.165 85;
     --chart-2: 0.65 0.18 75;
-    --chart-3: 0.5 0.12 265;
+    --chart-3: 0.5 0.12 255;
     --chart-4: 0.7 0.15 140;
     --chart-5: 0.62 0.22 25;
 
     /* Sidebar */
-    --sidebar: 0.1 0.03 265;
-    --sidebar-foreground: 0.96 0.015 90;
+    --sidebar: 0.11 0.025 255;
+    --sidebar-foreground: 0.96 0.01 90;
     --sidebar-primary: 0.78 0.165 85;
-    --sidebar-primary-foreground: 0.08 0.025 265;
-    --sidebar-accent: 0.14 0.04 265;
+    --sidebar-primary-foreground: 0.1 0.02 255;
+    --sidebar-accent: 0.16 0.03 255;
     --sidebar-accent-foreground: 0.85 0.02 90;
-    --sidebar-border: 0.22 0.04 265;
+    --sidebar-border: 0.25 0.03 255;
     --sidebar-ring: 0.78 0.165 85;
   }
 
@@ -81,10 +81,10 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: "Mona Sans", ui-sans-serif, system-ui, sans-serif;
+    font-family: "General Sans", ui-sans-serif, system-ui, sans-serif;
     background-image:
-      radial-gradient(ellipse at 20% 20%, oklch(0.12 0.06 265 / 0.8) 0%, transparent 50%),
-      radial-gradient(ellipse at 80% 80%, oklch(0.1 0.04 270 / 0.6) 0%, transparent 50%);
+      radial-gradient(ellipse at 20% 20%, oklch(0.14 0.05 255 / 0.7) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 80%, oklch(0.11 0.04 260 / 0.5) 0%, transparent 50%);
     background-attachment: fixed;
   }
 
@@ -94,16 +94,16 @@
 }
 
 @layer utilities {
-  /* Glass morphism utility */
+  /* Glass morphism */
   .glass-panel {
-    background: oklch(0.12 0.035 265 / 0.7);
+    background: oklch(0.13 0.03 255 / 0.7);
     border: 1px solid oklch(0.78 0.165 85 / 0.2);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
   }
 
   .glass-panel-strong {
-    background: oklch(0.12 0.035 265 / 0.85);
+    background: oklch(0.13 0.03 255 / 0.9);
     border: 1px solid oklch(0.78 0.165 85 / 0.3);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
@@ -113,7 +113,7 @@
   .text-gold-gradient {
     background: linear-gradient(
       135deg,
-      oklch(0.85 0.18 88) 0%,
+      oklch(0.88 0.18 88) 0%,
       oklch(0.78 0.165 85) 40%,
       oklch(0.65 0.14 75) 100%
     );
@@ -125,7 +125,7 @@
   /* Digital counter font */
   .font-digital {
     font-family: "Geist Mono", ui-monospace, monospace;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.03em;
     font-variant-numeric: tabular-nums;
   }
 
@@ -133,11 +133,11 @@
   .font-broadcast {
     font-family: "Bricolage Grotesque", ui-sans-serif, sans-serif;
     font-weight: 800;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.01em;
     text-transform: uppercase;
   }
 
-  /* Gold glow effect */
+  /* Gold text glow */
   .gold-glow {
     text-shadow:
       0 0 20px oklch(0.78 0.165 85 / 0.8),
@@ -145,7 +145,7 @@
       0 0 80px oklch(0.78 0.165 85 / 0.2);
   }
 
-  /* Gold border glow */
+  /* Gold box glow */
   .gold-border-glow {
     box-shadow:
       0 0 0 1px oklch(0.78 0.165 85 / 0.4),
@@ -155,66 +155,45 @@
 
   /* Pulsing animation for live bid */
   .pulse-gold {
-    animation: pulse-gold 2s ease-in-out infinite;
+    animation: pulse-gold 2.5s ease-in-out infinite;
   }
 
   @keyframes pulse-gold {
-    0%,
-    100% {
+    0%, 100% {
       text-shadow:
         0 0 20px oklch(0.78 0.165 85 / 0.8),
         0 0 40px oklch(0.78 0.165 85 / 0.4);
     }
     50% {
       text-shadow:
-        0 0 30px oklch(0.85 0.18 88 / 1),
-        0 0 60px oklch(0.78 0.165 85 / 0.6),
-        0 0 100px oklch(0.78 0.165 85 / 0.3);
+        0 0 35px oklch(0.88 0.18 88 / 1),
+        0 0 70px oklch(0.78 0.165 85 / 0.6),
+        0 0 110px oklch(0.78 0.165 85 / 0.3);
     }
-  }
-
-  /* SOLD flash animation */
-  @keyframes sold-flash {
-    0% {
-      opacity: 0;
-      transform: scale(0.8);
-    }
-    20% {
-      opacity: 1;
-      transform: scale(1.05);
-    }
-    80% {
-      opacity: 1;
-      transform: scale(1);
-    }
-    100% {
-      opacity: 0;
-      transform: scale(0.95);
-    }
-  }
-
-  .sold-animation {
-    animation: sold-flash 3s ease-in-out forwards;
   }
 
   /* Bid counter bump */
   @keyframes bid-bump {
-    0% {
-      transform: scale(1);
-    }
-    30% {
-      transform: scale(1.08);
-    }
-    60% {
-      transform: scale(0.97);
-    }
-    100% {
-      transform: scale(1);
-    }
+    0%   { transform: scale(1); }
+    30%  { transform: scale(1.1); }
+    60%  { transform: scale(0.97); }
+    100% { transform: scale(1); }
   }
 
   .bid-bump {
-    animation: bid-bump 0.4s ease-out;
+    animation: bid-bump 0.35s ease-out;
+  }
+
+  /* SOLD overlay animation */
+  @keyframes sold-overlay-anim {
+    0%   { opacity: 0; transform: scale(0.8); }
+    15%  { opacity: 1; transform: scale(1.04); }
+    80%  { opacity: 1; transform: scale(1); }
+    100% { opacity: 0; transform: scale(0.96); }
+  }
+
+  .sold-overlay-anim {
+    animation: sold-overlay-anim 4s ease-in-out forwards;
   }
 
   /* Scan line overlay for broadcast effect */
@@ -227,30 +206,27 @@
     inset: 0;
     background: repeating-linear-gradient(
       0deg,
-      oklch(0 0 0 / 0.03) 0px,
-      oklch(0 0 0 / 0.03) 1px,
+      oklch(0 0 0 / 0.025) 0px,
+      oklch(0 0 0 / 0.025) 1px,
       transparent 1px,
       transparent 2px
     );
     pointer-events: none;
+    z-index: 1;
   }
 
   /* Shimmer loading */
   @keyframes shimmer {
-    0% {
-      background-position: -200% 0;
-    }
-    100% {
-      background-position: 200% 0;
-    }
+    0%   { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
   }
 
   .shimmer {
     background: linear-gradient(
       90deg,
-      oklch(0.14 0.04 265) 25%,
-      oklch(0.2 0.05 265) 50%,
-      oklch(0.14 0.04 265) 75%
+      oklch(0.15 0.03 255) 25%,
+      oklch(0.2 0.04 255) 50%,
+      oklch(0.15 0.03 255) 75%
     );
     background-size: 200% 100%;
     animation: shimmer 1.5s infinite;
@@ -265,19 +241,46 @@
   }
 
   .team-card-hover:hover {
-    border-color: oklch(0.78 0.165 85 / 0.4);
+    border-color: oklch(0.78 0.165 85 / 0.4) !important;
     box-shadow:
-      0 0 20px oklch(0.78 0.165 85 / 0.1),
+      0 0 20px oklch(0.78 0.165 85 / 0.08),
       inset 0 0 20px oklch(0.78 0.165 85 / 0.03);
   }
 
-  /* Timer ring animation */
-  @keyframes timer-ring {
-    from {
-      stroke-dashoffset: 283;
-    }
-    to {
-      stroke-dashoffset: 0;
-    }
+  /* Custom range input track */
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: oklch(0.78 0.165 85);
+    cursor: pointer;
+    border: 2px solid oklch(0.1 0.02 255);
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: oklch(0.78 0.165 85);
+    cursor: pointer;
+    border: 2px solid oklch(0.1 0.02 255);
+  }
+
+  /* Custom select */
+  select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 30px !important;
+  }
+
+  select option {
+    background: oklch(0.13 0.025 255);
+    color: oklch(0.96 0.01 90);
   }
 }

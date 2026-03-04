@@ -1,5 +1,11 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AuctionState, Dashboard, Player, Team } from "../backend.d";
+import {
+  isSettingsPlayer,
+  loadSettingsFromBackend,
+} from "../utils/settingsStore";
+import { syncSettingsToOffline, syncToOffline } from "../utils/syncToOffline";
 import { useActor } from "./useActor";
 
 export interface AuctionData {
@@ -13,20 +19,21 @@ export interface AuctionData {
   pausePolling: (ms: number) => void;
 }
 
-// Slow-connection tolerant settings:
-// - Poll every 3 seconds (was 1.5s) to reduce bandwidth usage
-// - Only show error after 5 consecutive failures (was 3)
-// - Back off aggressively on errors to avoid flooding the connection
-const DEFAULT_POLL_MS = 3000;
-const MAX_CONSECUTIVE_ERRORS = 5;
+// Show error UI after this many consecutive failures
+const MAX_CONSECUTIVE_ERRORS = 3;
+// Force-recreate the ICP actor after this many failures
+// (covers the "canister is stopped" case)
+const ACTOR_RECREATE_THRESHOLD = 2;
 
-export function useAuctionData(intervalMs = DEFAULT_POLL_MS): AuctionData {
+export function useAuctionData(intervalMs = 3000): AuctionData {
   const { actor, isFetching } = useActor();
+  const queryClient = useQueryClient();
   const [auctionState, setAuctionState] = useState<AuctionState | null>(null);
   const [teams, setTeams] = useState<Team[]>([]);
   const [players, setPlayers] = useState<Player[]>([]);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  // Start as false — actor initialisation itself is shown via ConnectingScreen
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -35,7 +42,10 @@ export function useAuctionData(intervalMs = DEFAULT_POLL_MS): AuctionData {
   const consecutiveErrorsRef = useRef(0);
   const isFetchingDataRef = useRef(false);
   const mountedRef = useRef(true);
-  const hasDataRef = useRef(false);
+  // Only load settings once per actor instance to avoid expensive polling
+  const settingsSyncedRef = useRef(false);
+  // Rate-limit actor recreations to avoid a tight loop
+  const lastActorRecreateRef = useRef<number>(0);
 
   const clearTimers = useCallback(() => {
     if (intervalRef.current) {
@@ -48,84 +58,136 @@ export function useAuctionData(intervalMs = DEFAULT_POLL_MS): AuctionData {
     }
   }, []);
 
+  /**
+   * Force-recreate the actor by invalidating its react-query cache entry.
+   * This handles the "canister is stopped" case where the existing actor
+   * object is valid but the canister on the network is down/restarted.
+   * Rate-limited to once per 10 seconds.
+   */
+  const tryRecreateActor = useCallback(() => {
+    const now = Date.now();
+    if (now - lastActorRecreateRef.current < 10000) return;
+    lastActorRecreateRef.current = now;
+    queryClient.invalidateQueries({ queryKey: ["actor"] });
+    queryClient.refetchQueries({ queryKey: ["actor"] });
+  }, [queryClient]);
+
   const fetchAll = useCallback(async () => {
-    if (!actor) return;
+    if (!actor) {
+      // Actor not ready yet — keep isLoading false so UI can show connecting state
+      return;
+    }
     if (Date.now() < pausedUntilRef.current) return;
     if (isFetchingDataRef.current) return;
 
     isFetchingDataRef.current = true;
+    // Only show spinner on the very first fetch (teams not yet loaded)
+    if (mountedRef.current) setIsLoading(true);
     try {
-      // Sequential calls to avoid hammering a slow connection simultaneously.
-      // Each call is awaited one at a time — this reduces peak bandwidth and
-      // prevents timeouts from piling up on mobile hotspots.
-      const state = await actor.getAuctionState();
+      // Parallel fetch — total wait = slowest single call
+      const [state, teamsData, playersData, dashData] = await Promise.all([
+        actor.getAuctionState(),
+        actor.getTeams(),
+        actor.getPlayers(),
+        actor.getDashboard(),
+      ]);
+
       if (!mountedRef.current) return;
 
-      const teamsData = await actor.getTeams();
-      if (!mountedRef.current) return;
-
-      const playersData = await actor.getPlayers();
-      if (!mountedRef.current) return;
-
-      const dashData = await actor.getDashboard();
-      if (!mountedRef.current) return;
+      // Filter out the hidden settings player so it never appears in UI
+      const visiblePlayers = playersData.filter((p) => !isSettingsPlayer(p));
 
       setAuctionState(state);
       setTeams(teamsData);
-      setPlayers(playersData);
+      setPlayers(visiblePlayers);
       setDashboard(dashData);
       setError(null);
       consecutiveErrorsRef.current = 0;
-      hasDataRef.current = true;
+
+      // Auto-sync latest online data to offline localStorage backup
+      // Runs silently — never throws, never affects online functionality
+      syncToOffline();
+
+      // On first successful fetch, load settings from backend and mirror
+      // them to localStorage so offline mode and other devices stay in sync.
+      if (!settingsSyncedRef.current) {
+        settingsSyncedRef.current = true;
+        loadSettingsFromBackend(actor).then((settings) => {
+          if (settings && mountedRef.current) {
+            syncSettingsToOffline(settings);
+          }
+        });
+      }
     } catch (err) {
       if (!mountedRef.current) return;
       consecutiveErrorsRef.current += 1;
 
-      // Only surface error to UI after several consecutive failures
-      // (transient hiccups on mobile should be invisible to the user)
+      // At ACTOR_RECREATE_THRESHOLD failures, force a new actor to be created.
+      // The canister may have been restarted on the network.
+      if (
+        consecutiveErrorsRef.current > 0 &&
+        consecutiveErrorsRef.current % ACTOR_RECREATE_THRESHOLD === 0
+      ) {
+        tryRecreateActor();
+      }
+
       if (consecutiveErrorsRef.current >= MAX_CONSECUTIVE_ERRORS) {
         const msg =
           err instanceof Error ? err.message : "Failed to connect to server";
         setError(msg);
-      }
 
-      // Backoff: wait longer between retries as failures accumulate
-      // Max 30 seconds on repeated failures (important for mobile hotspot)
-      if (consecutiveErrorsRef.current >= MAX_CONSECUTIVE_ERRORS) {
+        // Short fixed backoff (1s) — recover quickly when canister comes back
         clearTimers();
-        const backoffMs = Math.min(
-          5000 * (consecutiveErrorsRef.current - MAX_CONSECUTIVE_ERRORS + 1),
-          30000,
-        );
         retryTimerRef.current = setTimeout(() => {
           if (!mountedRef.current) return;
-          // Keep the error count elevated so backoff continues, but reset
-          // after a successful fetch inside fetchAll
           isFetchingDataRef.current = false;
+          tryRecreateActor(); // Force fresh actor on each retry
           fetchAll().then(() => {
             if (mountedRef.current && !intervalRef.current) {
               intervalRef.current = setInterval(fetchAll, intervalMs);
             }
           });
-        }, backoffMs);
+        }, 1000);
       }
     } finally {
       if (mountedRef.current) setIsLoading(false);
       isFetchingDataRef.current = false;
     }
-  }, [actor, intervalMs, clearTimers]);
+  }, [actor, intervalMs, clearTimers, tryRecreateActor]);
 
   useEffect(() => {
     mountedRef.current = true;
+
+    // Recover when tab regains focus or device comes back online —
+    // covers the projector screen that was idle for a long time.
+    const onResume = () => {
+      if (!mountedRef.current) return;
+      tryRecreateActor();
+      consecutiveErrorsRef.current = 0;
+      setError(null);
+      isFetchingDataRef.current = false;
+      clearTimers();
+      fetchAll().then(() => {
+        if (mountedRef.current && !intervalRef.current) {
+          intervalRef.current = setInterval(fetchAll, intervalMs);
+        }
+      });
+    };
+    window.addEventListener("focus", onResume);
+    window.addEventListener("online", onResume);
+
     return () => {
       mountedRef.current = false;
+      window.removeEventListener("focus", onResume);
+      window.removeEventListener("online", onResume);
     };
-  }, []);
+  }, [clearTimers, fetchAll, intervalMs, tryRecreateActor]);
 
   useEffect(() => {
     if (!actor || isFetching) return;
 
     consecutiveErrorsRef.current = 0;
+    settingsSyncedRef.current = false; // Reset so we re-sync settings on new actor
     setError(null);
     isFetchingDataRef.current = false;
     clearTimers();
@@ -143,14 +205,15 @@ export function useAuctionData(intervalMs = DEFAULT_POLL_MS): AuctionData {
   const refetch = useCallback(async () => {
     consecutiveErrorsRef.current = 0;
     setError(null);
+    setIsLoading(true);
     isFetchingDataRef.current = false;
     clearTimers();
+    tryRecreateActor();
     await fetchAll();
-    // Resume polling after manual refetch
     if (mountedRef.current && !intervalRef.current) {
       intervalRef.current = setInterval(fetchAll, intervalMs);
     }
-  }, [fetchAll, clearTimers, intervalMs]);
+  }, [fetchAll, clearTimers, intervalMs, tryRecreateActor]);
 
   return {
     auctionState,

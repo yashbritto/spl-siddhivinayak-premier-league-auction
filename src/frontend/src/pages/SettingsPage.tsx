@@ -1,2931 +1,2663 @@
-import { useNavigate } from "@tanstack/react-router";
 import {
-  AlertCircle,
-  ArrowLeft,
   ChevronDown,
+  ChevronLeft,
   ChevronUp,
-  Edit3,
-  ImageIcon,
   Loader2,
-  Lock,
-  Monitor,
+  Minus,
   Plus,
-  RotateCcw,
   Save,
-  Settings,
-  Star,
   Trash2,
-  Trophy,
   Upload,
-  Users,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { Player, Team } from "../backend.d";
 import { useActor } from "../hooks/useActor";
 import { useImageUpload } from "../hooks/useImageUpload";
+import type { IDBCategory, IDBPlayer, IDBTeam } from "../idbStore";
+import { IDB_CHANGE_EVENT, idbStore } from "../idbStore";
+import {
+  type AllSettings,
+  saveSettingsToBackend,
+} from "../utils/settingsStore";
+import {
+  DEFAULT_LIVE_COLORS,
+  DEFAULT_LIVE_LAYOUT,
+  LIVE_LAYOUT_KEY,
+  type LeagueSettings,
+  type LiveColorTheme,
+  type LiveLayoutConfig,
+  getLeagueSettings,
+  getLiveColors,
+  getLiveLayout,
+  saveLeagueSettings,
+  saveLiveColors,
+} from "./LandingPage";
 
-// ─── League Settings localStorage helpers ────────────────────────────────────
+// ─── Auth guard ────────────────────────────────────────────────────────────────
+const AUTH_KEY = "spl_admin_auth";
 
-export interface LeagueConfig {
-  shortName: string;
-  fullName: string;
-  logoUrl: string;
-  logoSize: number; // percentage 50–200, default 100
-  shortNameSize: number; // percentage 50–200, default 100
-  fullNameSize: number; // percentage 50–200, default 100
+function isAuthenticated() {
+  return localStorage.getItem(AUTH_KEY) === "1";
 }
 
-const LEAGUE_SETTINGS_KEY = "spl_league_settings";
-const TEAM_LOGOS_KEY = "spl_team_logos";
+// ─── Tab type ─────────────────────────────────────────────────────────────────
+type Tab = "league" | "teams" | "players" | "layout" | "colours";
 
-export function getLeagueConfig(): LeagueConfig {
-  try {
-    const raw = localStorage.getItem(LEAGUE_SETTINGS_KEY);
-    if (raw) {
-      return {
-        shortName: "SPL",
-        fullName: "Siddhivinayak Premier League",
-        logoUrl: "",
-        logoSize: 100,
-        shortNameSize: 100,
-        fullNameSize: 100,
-        ...(JSON.parse(raw) as Partial<LeagueConfig>),
-      };
-    }
-  } catch {
-    // fall through
-  }
-  return {
-    shortName: "SPL",
-    fullName: "Siddhivinayak Premier League",
-    logoUrl: "",
-    logoSize: 100,
-    shortNameSize: 100,
-    fullNameSize: 100,
+// ─── Upload button ────────────────────────────────────────────────────────────
+function UploadBtn({
+  onUrl,
+  label = "UPLOAD",
+  circle = false,
+}: {
+  onUrl: (url: string) => void;
+  label?: string;
+  circle?: boolean;
+}) {
+  const { upload, progress, isUploading } = useImageUpload();
+  const ref = useRef<HTMLInputElement>(null);
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = await upload(file);
+    if (url) onUrl(url);
+    e.target.value = "";
   };
+
+  return (
+    <label
+      className="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 text-xs font-broadcast tracking-wider transition-all hover:opacity-80 active:scale-95"
+      style={{
+        background: "oklch(0.78 0.165 85 / 0.12)",
+        border: "1px solid oklch(0.78 0.165 85 / 0.4)",
+        color: "oklch(0.78 0.165 85)",
+        borderRadius: circle ? "9999px" : 0,
+      }}
+    >
+      {isUploading ? (
+        <>
+          <Loader2 size={12} className="animate-spin" />
+          {progress}%
+        </>
+      ) : (
+        <>
+          <Upload size={12} />
+          {label}
+        </>
+      )}
+      <input
+        ref={ref}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleFile}
+      />
+    </label>
+  );
 }
 
-// ─── Live Layout Config ───────────────────────────────────────────────────────
-
-export interface LiveLayoutConfig {
-  playerImageWidth: number;
-  playerImageHeight: number;
-  playerNameSize: number;
-  categoryBadgeSize: number;
-  bidCounterSize: number;
-  leadingTeamSize: number;
-  rightPanelWidth: number;
-  teamTableFontSize: number;
-  chartHeight: number;
-  headerLogoSize: number;
-}
-
-export const LIVE_LAYOUT_KEY = "spl_live_layout";
-
-export const DEFAULT_LIVE_LAYOUT: LiveLayoutConfig = {
-  playerImageWidth: 208,
-  playerImageHeight: 256,
-  playerNameSize: 100,
-  categoryBadgeSize: 100,
-  bidCounterSize: 100,
-  leadingTeamSize: 100,
-  rightPanelWidth: 384,
-  teamTableFontSize: 100,
-  chartHeight: 200,
-  headerLogoSize: 36,
-};
-
-export function getLiveLayout(): LiveLayoutConfig {
-  try {
-    const raw = localStorage.getItem(LIVE_LAYOUT_KEY);
-    if (raw) return { ...DEFAULT_LIVE_LAYOUT, ...JSON.parse(raw) };
-  } catch {
-    // fall through
+// ─── Photo preview ────────────────────────────────────────────────────────────
+function PhotoPreview({
+  url,
+  size = 48,
+  circle = false,
+  fallback,
+}: {
+  url: string;
+  size?: number;
+  circle?: boolean;
+  fallback?: string;
+}) {
+  if (!url) {
+    return (
+      <div
+        style={{
+          width: size,
+          height: size,
+          borderRadius: circle ? "50%" : 0,
+          background: "oklch(0.14 0.04 255)",
+          border: "1px solid oklch(0.22 0.04 255)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: size * 0.35,
+          color: "oklch(0.35 0.02 90)",
+          fontFamily: '"Bricolage Grotesque", sans-serif',
+          fontWeight: 900,
+          flexShrink: 0,
+        }}
+      >
+        {fallback ?? "?"}
+      </div>
+    );
   }
-  return { ...DEFAULT_LIVE_LAYOUT };
+  return (
+    <img
+      src={url}
+      alt=""
+      style={{
+        width: size,
+        height: size,
+        objectFit: "cover",
+        borderRadius: circle ? "50%" : 0,
+        border: "1px solid oklch(0.78 0.165 85 / 0.3)",
+        flexShrink: 0,
+      }}
+    />
+  );
 }
 
-function saveLeagueConfig(config: LeagueConfig) {
-  localStorage.setItem(LEAGUE_SETTINGS_KEY, JSON.stringify(config));
+// ─── League Tab ───────────────────────────────────────────────────────────────
+function LeagueTab() {
+  const { actor } = useActor();
+  const [settings, setSettings] = useState<LeagueSettings>(getLeagueSettings());
+  const [saved, setSaved] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  const save = async () => {
+    saveLeagueSettings(settings);
+    // Also save to IDB for offline access
+    await idbStore.setSetting("spl_league_settings", JSON.stringify(settings));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+    toast.success("League settings saved");
+    // Background sync to backend (fire-and-forget, completely silent)
+    if (actor) {
+      setSyncing(true);
+      // Get all settings to sync
+      const [teamLogosRaw, ownerPhotosRaw, iconPhotosRaw] = await Promise.all([
+        idbStore.getSetting("spl_team_logos"),
+        idbStore.getSetting("spl_owner_photos"),
+        idbStore.getSetting("spl_icon_photos"),
+      ]);
+      const allSettings: AllSettings = {
+        league: settings,
+        teamLogos: teamLogosRaw
+          ? (JSON.parse(teamLogosRaw) as Record<string, string>)
+          : {},
+        ownerPhotos: ownerPhotosRaw
+          ? (JSON.parse(ownerPhotosRaw) as Record<string, string>)
+          : {},
+        iconPhotos: iconPhotosRaw
+          ? (JSON.parse(iconPhotosRaw) as Record<string, string>)
+          : {},
+        liveColors: getLiveColors(),
+        liveLayout: getLiveLayout(),
+      };
+      saveSettingsToBackend(actor, allSettings).finally(() => {
+        setSyncing(false);
+      });
+    }
+  };
+
+  return (
+    <div className="max-w-lg space-y-6">
+      <h2
+        className="font-broadcast text-lg tracking-widest"
+        style={{ color: "oklch(0.78 0.165 85)" }}
+      >
+        LEAGUE SETTINGS
+      </h2>
+
+      {/* Logo */}
+      <div className="space-y-2">
+        <span
+          className="font-broadcast text-xs tracking-widest"
+          style={{ color: "oklch(0.55 0.02 90)" }}
+        >
+          LEAGUE LOGO
+        </span>
+        <div className="flex items-center gap-3">
+          {settings.logoUrl ? (
+            <img
+              src={settings.logoUrl}
+              alt="logo"
+              style={{ height: 80, maxWidth: 160, objectFit: "contain" }}
+            />
+          ) : (
+            <div
+              style={{
+                width: 80,
+                height: 80,
+                background: "oklch(0.14 0.04 255)",
+                border: "1px solid oklch(0.22 0.04 255)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "oklch(0.3 0.02 90)",
+                fontSize: 11,
+              }}
+              className="font-broadcast tracking-widest"
+            >
+              NO LOGO
+            </div>
+          )}
+          <div className="flex flex-col gap-2">
+            <UploadBtn
+              onUrl={(url) => setSettings((s) => ({ ...s, logoUrl: url }))}
+            />
+            {settings.logoUrl && (
+              <button
+                type="button"
+                onClick={() => setSettings((s) => ({ ...s, logoUrl: "" }))}
+                className="text-xs font-broadcast tracking-wider px-2 py-1 transition-opacity hover:opacity-70"
+                style={{ color: "oklch(0.65 0.18 25)" }}
+              >
+                REMOVE
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Logo size */}
+      <div className="space-y-1">
+        <div className="flex justify-between">
+          <span
+            className="font-broadcast text-xs tracking-widest"
+            style={{ color: "oklch(0.55 0.02 90)" }}
+          >
+            LOGO SIZE
+          </span>
+          <span
+            className="font-digital text-xs"
+            style={{ color: "oklch(0.78 0.165 85)" }}
+          >
+            {settings.logoSize}%
+          </span>
+        </div>
+        <input
+          type="range"
+          min={50}
+          max={200}
+          value={settings.logoSize}
+          onChange={(e) =>
+            setSettings((s) => ({ ...s, logoSize: +e.target.value }))
+          }
+          className="w-full accent-amber-400"
+        />
+      </div>
+
+      {/* Short name */}
+      <div className="space-y-1">
+        <span
+          className="font-broadcast text-xs tracking-widest"
+          style={{ color: "oklch(0.55 0.02 90)" }}
+        >
+          SHORT NAME (e.g. SPL)
+        </span>
+        <input
+          value={settings.shortName}
+          onChange={(e) =>
+            setSettings((s) => ({ ...s, shortName: e.target.value }))
+          }
+          className="w-full px-3 py-2 font-broadcast tracking-wider text-sm"
+          style={{
+            background: "oklch(0.11 0.03 255)",
+            border: "1px solid oklch(0.22 0.05 255)",
+            color: "oklch(0.88 0.02 90)",
+            outline: "none",
+          }}
+          placeholder="SPL"
+        />
+      </div>
+
+      {/* Full name */}
+      <div className="space-y-1">
+        <span
+          className="font-broadcast text-xs tracking-widest"
+          style={{ color: "oklch(0.55 0.02 90)" }}
+        >
+          FULL NAME
+        </span>
+        <input
+          value={settings.fullName}
+          onChange={(e) =>
+            setSettings((s) => ({ ...s, fullName: e.target.value }))
+          }
+          className="w-full px-3 py-2 font-broadcast tracking-wider text-sm"
+          style={{
+            background: "oklch(0.11 0.03 255)",
+            border: "1px solid oklch(0.22 0.05 255)",
+            color: "oklch(0.88 0.02 90)",
+            outline: "none",
+          }}
+          placeholder="Siddhivinayak Premier League 2026"
+        />
+      </div>
+
+      {/* Auction year / event label */}
+      <div className="space-y-1">
+        <span
+          className="font-broadcast text-xs tracking-widest"
+          style={{ color: "oklch(0.55 0.02 90)" }}
+        >
+          AUCTION YEAR / EVENT LABEL
+        </span>
+        <input
+          value={settings.auctionYear ?? "PLAYER AUCTION 2026"}
+          onChange={(e) =>
+            setSettings((s) => ({ ...s, auctionYear: e.target.value }))
+          }
+          className="w-full px-3 py-2 font-broadcast tracking-wider text-sm"
+          style={{
+            background: "oklch(0.11 0.03 255)",
+            border: "1px solid oklch(0.22 0.05 255)",
+            color: "oklch(0.88 0.02 90)",
+            outline: "none",
+          }}
+          placeholder="PLAYER AUCTION 2026"
+        />
+        <p
+          className="font-broadcast text-xs"
+          style={{ color: "oklch(0.42 0.02 90)" }}
+        >
+          Shown in the live screen header after the league name
+        </p>
+      </div>
+
+      {/* Name size */}
+      <div className="space-y-1">
+        <div className="flex justify-between">
+          <span
+            className="font-broadcast text-xs tracking-widest"
+            style={{ color: "oklch(0.55 0.02 90)" }}
+          >
+            NAME SIZE
+          </span>
+          <span
+            className="font-digital text-xs"
+            style={{ color: "oklch(0.78 0.165 85)" }}
+          >
+            {settings.nameSize}%
+          </span>
+        </div>
+        <input
+          type="range"
+          min={50}
+          max={200}
+          value={settings.nameSize}
+          onChange={(e) =>
+            setSettings((s) => ({ ...s, nameSize: +e.target.value }))
+          }
+          className="w-full accent-amber-400"
+        />
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={save}
+          className="flex items-center gap-2 px-6 py-2 font-broadcast tracking-widest text-sm transition-all hover:opacity-90 active:scale-95"
+          style={{
+            background: saved
+              ? "oklch(0.55 0.15 140)"
+              : "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
+            color: "oklch(0.08 0.02 265)",
+            boxShadow: "0 0 20px oklch(0.78 0.165 85 / 0.25)",
+          }}
+        >
+          <Save size={14} />
+          {saved ? "SAVED!" : "SAVE LEAGUE"}
+        </button>
+        {syncing && (
+          <span
+            className="flex items-center gap-1.5 text-xs font-broadcast tracking-wider"
+            style={{ color: "oklch(0.55 0.02 90)" }}
+          >
+            <Loader2 size={11} className="animate-spin" />
+            Syncing…
+          </span>
+        )}
+      </div>
+    </div>
+  );
 }
 
-export function getTeamLogos(): Record<string, string> {
-  try {
-    const raw = localStorage.getItem(TEAM_LOGOS_KEY);
-    if (raw) return JSON.parse(raw) as Record<string, string>;
-  } catch {
-    // fall through
+// ─── Teams Tab ────────────────────────────────────────────────────────────────
+function TeamsTab() {
+  const { actor } = useActor();
+  const [teams, setTeams] = useState<IDBTeam[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [teamLogos, setTeamLogos] = useState<Record<string, string>>({});
+  const [ownerPhotos, setOwnerPhotos] = useState<Record<string, string>>({});
+  const [iconPhotos, setIconPhotos] = useState<Record<string, string>>({});
+  const [localEdits, setLocalEdits] = useState<
+    Record<
+      string,
+      {
+        name: string;
+        ownerName: string;
+        teamIconPlayer: string;
+        purse: string;
+        saving: boolean;
+      }
+    >
+  >({});
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [t, logosRaw, ownerRaw, iconRaw] = await Promise.all([
+        idbStore.getTeams(),
+        idbStore.getSetting("spl_team_logos"),
+        idbStore.getSetting("spl_owner_photos"),
+        idbStore.getSetting("spl_icon_photos"),
+      ]);
+      setTeams(t);
+      setTeamLogos(
+        logosRaw ? (JSON.parse(logosRaw) as Record<string, string>) : {},
+      );
+      setOwnerPhotos(
+        ownerRaw ? (JSON.parse(ownerRaw) as Record<string, string>) : {},
+      );
+      setIconPhotos(
+        iconRaw ? (JSON.parse(iconRaw) as Record<string, string>) : {},
+      );
+      const edits: typeof localEdits = {};
+      for (const team of t) {
+        edits[String(team.id)] = {
+          name: team.name,
+          ownerName: team.ownerName,
+          teamIconPlayer: team.teamIconPlayer,
+          purse: String(team.purseAmountLeft),
+          saving: false,
+        };
+      }
+      setLocalEdits(edits);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAll();
+  }, [loadAll]);
+
+  const setEdit = (id: string, patch: Partial<(typeof localEdits)[string]>) => {
+    setLocalEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  };
+
+  const saveTeam = async (team: IDBTeam) => {
+    const id = String(team.id);
+    const edit = localEdits[id];
+    if (!edit) return;
+    setEdit(id, { saving: true });
+    try {
+      const newPurse = Number(edit.purse) || 0;
+      await idbStore.updateTeam(
+        team.id,
+        edit.name,
+        edit.ownerName,
+        edit.teamIconPlayer,
+      );
+      if (newPurse !== team.purseAmountLeft) {
+        await idbStore.editTeamPurse(team.id, newPurse);
+      }
+      toast.success(`${edit.name} saved`);
+      setTeams((prev) =>
+        prev.map((t) =>
+          t.id === team.id
+            ? {
+                ...t,
+                name: edit.name,
+                ownerName: edit.ownerName,
+                teamIconPlayer: edit.teamIconPlayer,
+                purseAmountLeft: newPurse,
+              }
+            : t,
+        ),
+      );
+      // Background sync to backend
+      if (actor) {
+        try {
+          await actor.updateTeam(
+            BigInt(team.id),
+            edit.name,
+            edit.ownerName,
+            edit.teamIconPlayer,
+          );
+          if (newPurse !== team.purseAmountLeft) {
+            await actor.editTeamPurse(BigInt(team.id), BigInt(newPurse));
+          }
+        } catch {
+          /* silent */
+        }
+      }
+    } catch {
+      toast.error("Failed to save team");
+    } finally {
+      setEdit(id, { saving: false });
+    }
+  };
+
+  // Helper: save photos to IDB and background-sync to backend
+  const savePhotos = async (
+    newLogos: Record<string, string>,
+    newOwner: Record<string, string>,
+    newIcon: Record<string, string>,
+  ) => {
+    await Promise.all([
+      idbStore.setSetting("spl_team_logos", JSON.stringify(newLogos)),
+      idbStore.setSetting("spl_owner_photos", JSON.stringify(newOwner)),
+      idbStore.setSetting("spl_icon_photos", JSON.stringify(newIcon)),
+    ]);
+    // Also update localStorage for same-device LivePage reads
+    try {
+      localStorage.setItem("spl_team_logos", JSON.stringify(newLogos));
+      localStorage.setItem("spl_owner_photos", JSON.stringify(newOwner));
+      localStorage.setItem("spl_icon_photos", JSON.stringify(newIcon));
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "spl_team_logos" }),
+      );
+    } catch {
+      /* ignore */
+    }
+    // Background sync settings to backend
+    if (actor) {
+      const leagueRaw = await idbStore.getSetting("spl_league_settings");
+      const league = leagueRaw
+        ? (JSON.parse(leagueRaw) as LeagueSettings)
+        : getLeagueSettings();
+      const allSettings: AllSettings = {
+        league,
+        teamLogos: newLogos,
+        ownerPhotos: newOwner,
+        iconPhotos: newIcon,
+        liveColors: getLiveColors(),
+        liveLayout: getLiveLayout(),
+      };
+      saveSettingsToBackend(actor, allSettings);
+    }
+  };
+
+  const saveLogo = async (team: IDBTeam, url: string) => {
+    const id = String(team.id);
+    const newLogos = { ...teamLogos, [id]: url };
+    setTeamLogos(newLogos);
+    await savePhotos(newLogos, ownerPhotos, iconPhotos);
+    toast.success("Logo saved");
+  };
+
+  const saveOwnerPhoto = async (teamId: string, url: string) => {
+    const updated = { ...ownerPhotos, [teamId]: url };
+    setOwnerPhotos(updated);
+    await savePhotos(teamLogos, updated, iconPhotos);
+    toast.success("Owner photo saved");
+  };
+
+  const saveIconPhoto = async (teamId: string, url: string) => {
+    const updated = { ...iconPhotos, [teamId]: url };
+    setIconPhotos(updated);
+    await savePhotos(teamLogos, ownerPhotos, updated);
+    toast.success("Icon photo saved");
+  };
+
+  if (loading) {
+    return (
+      <div
+        className="flex items-center gap-3"
+        style={{ color: "oklch(0.55 0.02 90)" }}
+      >
+        <Loader2 size={16} className="animate-spin" />
+        <span className="font-broadcast text-xs tracking-widest">
+          LOADING TEAMS...
+        </span>
+      </div>
+    );
   }
-  return {};
+
+  return (
+    <div className="space-y-4">
+      <h2
+        className="font-broadcast text-lg tracking-widest"
+        style={{ color: "oklch(0.78 0.165 85)" }}
+      >
+        TEAM SETTINGS
+      </h2>
+      {teams.map((team) => {
+        const id = String(team.id);
+        const edit = localEdits[id] ?? {
+          name: team.name,
+          ownerName: team.ownerName,
+          teamIconPlayer: team.teamIconPlayer,
+          purse: String(team.purseAmountLeft),
+          saving: false,
+        };
+        return (
+          <div
+            key={id}
+            className="p-4 space-y-4"
+            style={{
+              background: "oklch(0.10 0.025 255)",
+              border: "1px solid oklch(0.22 0.04 255 / 0.6)",
+            }}
+          >
+            {/* Photos row */}
+            <div className="flex gap-6 flex-wrap">
+              {/* Team logo */}
+              <div className="flex flex-col items-center gap-1">
+                <span
+                  className="font-broadcast text-xs tracking-widest"
+                  style={{ color: "oklch(0.45 0.02 90)", fontSize: 9 }}
+                >
+                  TEAM LOGO
+                </span>
+                <PhotoPreview
+                  url={teamLogos[id] ?? ""}
+                  size={52}
+                  circle
+                  fallback={team.name[0]}
+                />
+                <UploadBtn
+                  circle
+                  onUrl={(url) => {
+                    void saveLogo(team, url);
+                  }}
+                  label="LOGO"
+                />
+              </div>
+              {/* Owner photo */}
+              <div className="flex flex-col items-center gap-1">
+                <span
+                  className="font-broadcast text-xs tracking-widest"
+                  style={{ color: "oklch(0.45 0.02 90)", fontSize: 9 }}
+                >
+                  OWNER
+                </span>
+                <PhotoPreview
+                  url={ownerPhotos[id] ?? ""}
+                  size={52}
+                  circle
+                  fallback={edit.ownerName[0] ?? "O"}
+                />
+                <UploadBtn
+                  circle
+                  onUrl={(url) => {
+                    void saveOwnerPhoto(id, url);
+                  }}
+                  label="PHOTO"
+                />
+              </div>
+              {/* Icon photo */}
+              <div className="flex flex-col items-center gap-1">
+                <span
+                  className="font-broadcast text-xs tracking-widest"
+                  style={{ color: "oklch(0.45 0.02 90)", fontSize: 9 }}
+                >
+                  ICON PLAYER
+                </span>
+                <PhotoPreview
+                  url={iconPhotos[id] ?? ""}
+                  size={52}
+                  circle
+                  fallback={edit.teamIconPlayer[0] ?? "I"}
+                />
+                <UploadBtn
+                  circle
+                  onUrl={(url) => {
+                    void saveIconPhoto(id, url);
+                  }}
+                  label="PHOTO"
+                />
+              </div>
+            </div>
+
+            {/* Text fields */}
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { label: "TEAM NAME", key: "name" as const },
+                { label: "OWNER NAME", key: "ownerName" as const },
+                { label: "ICON PLAYER", key: "teamIconPlayer" as const },
+                { label: "PURSE REMAINING", key: "purse" as const },
+              ].map(({ label, key }) => (
+                <div key={key} className="space-y-1">
+                  <span
+                    className="font-broadcast tracking-widest"
+                    style={{ fontSize: 9, color: "oklch(0.45 0.02 90)" }}
+                  >
+                    {label}
+                  </span>
+                  <input
+                    value={edit[key]}
+                    onChange={(e) => setEdit(id, { [key]: e.target.value })}
+                    className="w-full px-2 py-1.5 text-sm"
+                    style={{
+                      background: "oklch(0.13 0.03 255)",
+                      border: "1px solid oklch(0.22 0.05 255)",
+                      color: "oklch(0.88 0.02 90)",
+                      outline: "none",
+                      fontFamily: key === "purse" ? "Geist Mono" : undefined,
+                    }}
+                    type={key === "purse" ? "number" : "text"}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                void saveTeam(team);
+              }}
+              disabled={edit.saving}
+              className="flex items-center gap-2 px-5 py-1.5 font-broadcast tracking-widest text-xs transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
+              style={{
+                background:
+                  "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
+                color: "oklch(0.08 0.02 265)",
+              }}
+            >
+              {edit.saving ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : (
+                <Save size={12} />
+              )}
+              SAVE TEAM
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
-function saveTeamLogos(logos: Record<string, string>) {
-  localStorage.setItem(TEAM_LOGOS_KEY, JSON.stringify(logos));
-}
-
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-interface TeamEditState {
-  name: string;
-  ownerName: string;
-  iconPlayerName: string;
-  purse: string;
-  logoUrl: string;
-  isDirty: boolean;
-  isSaving: boolean;
-}
+// ─── Players Tab ──────────────────────────────────────────────────────────────
+const CATEGORIES: { value: IDBCategory; label: string }[] = [
+  { value: "batsman", label: "BATSMAN" },
+  { value: "bowler", label: "BOWLER" },
+  { value: "allrounder", label: "ALLROUNDER" },
+];
 
 interface PlayerEditState {
   name: string;
-  category: string;
+  category: IDBCategory;
   basePrice: string;
   imageUrl: string;
   rating: string;
-  isDirty: boolean;
-  isSaving: boolean;
-  isExpanded: boolean;
+  saving: boolean;
+  expanded: boolean;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+function PlayersTab() {
+  const { actor } = useActor();
+  const [players, setPlayers] = useState<IDBPlayer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<"all" | IDBCategory>("all");
+  const [edits, setEdits] = useState<Record<string, PlayerEditState>>({});
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newPlayer, setNewPlayer] = useState({
+    name: "",
+    category: "batsman" as IDBCategory,
+    basePrice: "100",
+    imageUrl: "",
+    rating: "3",
+  });
+  const [addSaving, setAddSaving] = useState(false);
+  const { upload } = useImageUpload();
 
-const CATEGORY_COLORS: Record<string, string> = {
-  Batsman: "oklch(0.7 0.15 140)",
-  Bowler: "oklch(0.65 0.18 25)",
-  Allrounder: "oklch(0.78 0.165 85)",
-};
+  const fetchPlayers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const ps = await idbStore.getPlayers();
+      // Filter upcoming/unsold/live only — exclude sold players and show numbered
+      setPlayers(ps);
+      setEdits((prev) => {
+        const e: typeof edits = {};
+        for (const p of ps) {
+          const id = String(p.id);
+          e[id] = {
+            name: p.name,
+            category: p.category,
+            basePrice: String(p.basePrice),
+            imageUrl: p.imageUrl,
+            rating: String(p.rating),
+            saving: false,
+            expanded: prev[id]?.expanded ?? false,
+          };
+        }
+        return e;
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-function CategoryBadge({ category }: { category: string }) {
-  const color = CATEGORY_COLORS[category] ?? "oklch(0.55 0.02 90)";
-  return (
-    <span
-      className="text-xs font-broadcast tracking-widest px-2 py-0.5"
-      style={{
-        background: `${color}22`,
-        border: `1px solid ${color}66`,
-        color,
-      }}
-    >
-      {category.toUpperCase()}
-    </span>
-  );
-}
+  useEffect(() => {
+    void fetchPlayers();
+  }, [fetchPlayers]);
 
-function StarRating({ value }: { value: number }) {
-  return (
-    <div className="flex gap-0.5">
-      {[1, 2, 3, 4, 5].map((i) => (
-        <Star
-          key={i}
-          size={10}
-          style={{
-            color: i <= value ? "oklch(0.78 0.165 85)" : "oklch(0.25 0.03 265)",
-            fill: i <= value ? "oklch(0.78 0.165 85)" : "transparent",
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-// Inline field style
-const fieldStyle: React.CSSProperties = {
-  background: "oklch(0.08 0.025 265)",
-  border: "1px solid oklch(0.22 0.04 265)",
-  color: "oklch(0.96 0.015 90)",
-  outline: "none",
-};
-
-const fieldFocusClass =
-  "focus:ring-1 focus:ring-[oklch(0.78_0.165_85/0.4)] transition-shadow";
-
-// ─── League Tab ───────────────────────────────────────────────────────────────
-
-function LeagueTab() {
-  const [config, setConfig] = useState<LeagueConfig>(getLeagueConfig);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isDirty, setIsDirty] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const { uploadImage, isUploading, progress } = useImageUpload();
-
-  const update = (key: keyof LeagueConfig, val: string | number) => {
-    setConfig((prev) => ({ ...prev, [key]: val }));
-    setIsDirty(true);
+  const setEdit = (id: string, patch: Partial<PlayerEditState>) => {
+    setEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
   };
 
-  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = "";
+  const savePlayer = async (player: IDBPlayer) => {
+    const id = String(player.id);
+    const edit = edits[id];
+    if (!edit) return;
+    setEdit(id, { saving: true });
     try {
-      const url = await uploadImage(file);
-      setConfig((prev) => ({ ...prev, logoUrl: url }));
-      setIsDirty(true);
-      toast.success("Logo uploaded successfully");
+      const r = await idbStore.updatePlayer(
+        player.id,
+        edit.name,
+        edit.category,
+        Number(edit.basePrice) || 100,
+        edit.imageUrl,
+        Number(edit.rating) || 3,
+      );
+      if (!r.ok) toast.error(r.err);
+      else {
+        toast.success(`${edit.name} saved`);
+        // Background sync to backend
+        if (actor) {
+          try {
+            const { Category } = await import("../backend.d");
+            const catMap: Record<IDBCategory, unknown> = {
+              batsman: Category.batsman,
+              bowler: Category.bowler,
+              allrounder: Category.allrounder,
+            };
+            await actor.updatePlayer(
+              BigInt(player.id),
+              edit.name,
+              catMap[edit.category] as never,
+              BigInt(Number(edit.basePrice) || 100),
+              edit.imageUrl,
+              BigInt(Number(edit.rating) || 3),
+            );
+          } catch {
+            /* silent */
+          }
+        }
+        await fetchPlayers();
+      }
     } catch {
-      toast.error("Upload failed. Please try again.");
+      toast.error("Save failed");
+    } finally {
+      setEdit(id, { saving: false });
     }
   };
 
-  const handleSave = () => {
-    setIsSaving(true);
-    saveLeagueConfig(config);
-    setTimeout(() => {
-      setIsSaving(false);
-      setIsDirty(false);
-      toast.success(
-        "League settings saved — refresh the main pages to see changes",
-      );
-    }, 300);
+  const deletePlayer = async (player: IDBPlayer) => {
+    if (!confirm(`Delete ${player.name}? This cannot be undone.`)) return;
+    try {
+      const r = await idbStore.deletePlayer(player.id);
+      if (!r.ok) toast.error(r.err);
+      else {
+        toast.success("Player deleted");
+        // Background sync to backend
+        if (actor) {
+          try {
+            await actor.deletePlayer(BigInt(player.id));
+          } catch {
+            /* silent */
+          }
+        }
+        await fetchPlayers();
+      }
+    } catch {
+      toast.error("Delete failed");
+    }
   };
 
-  return (
-    <div className="space-y-6 max-w-2xl">
+  const addPlayer = async () => {
+    if (!newPlayer.name.trim()) return toast.error("Name required");
+    setAddSaving(true);
+    try {
+      const r = await idbStore.addPlayer(
+        newPlayer.name.trim(),
+        newPlayer.category,
+        Number(newPlayer.basePrice) || 100,
+        newPlayer.imageUrl,
+        Number(newPlayer.rating) || 3,
+      );
+      if (!r.ok) toast.error(r.err);
+      else {
+        toast.success("Player added");
+        // Background sync to backend
+        if (actor) {
+          try {
+            const { Category } = await import("../backend.d");
+            const catMap: Record<IDBCategory, unknown> = {
+              batsman: Category.batsman,
+              bowler: Category.bowler,
+              allrounder: Category.allrounder,
+            };
+            await actor.addPlayer(
+              newPlayer.name.trim(),
+              catMap[newPlayer.category] as never,
+              BigInt(Number(newPlayer.basePrice) || 100),
+              newPlayer.imageUrl,
+              BigInt(Number(newPlayer.rating) || 3),
+            );
+          } catch {
+            /* silent */
+          }
+        }
+        setNewPlayer({
+          name: "",
+          category: "batsman",
+          basePrice: "100",
+          imageUrl: "",
+          rating: "3",
+        });
+        setShowAddForm(false);
+        await fetchPlayers();
+      }
+    } catch {
+      toast.error("Add failed");
+    } finally {
+      setAddSaving(false);
+    }
+  };
+
+  const handleImageFile = async (file: File, id: string | null) => {
+    const url = await upload(file);
+    if (!url) return;
+    if (id === null) {
+      setNewPlayer((p) => ({ ...p, imageUrl: url }));
+    } else {
+      setEdit(id, { imageUrl: url });
+    }
+  };
+
+  const filteredPlayers =
+    filter === "all" ? players : players.filter((p) => p.category === filter);
+
+  if (loading) {
+    return (
       <div
-        className="px-1 flex items-center gap-2 text-xs"
-        style={{ color: "oklch(0.45 0.02 90)" }}
+        className="flex items-center gap-3"
+        style={{ color: "oklch(0.55 0.02 90)" }}
       >
-        <Trophy size={12} />
-        <span>Configure league name and logo displayed across all screens</span>
+        <Loader2 size={16} className="animate-spin" />
+        <span className="font-broadcast text-xs tracking-widest">
+          LOADING PLAYERS...
+        </span>
       </div>
+    );
+  }
 
-      {/* League details */}
-      <div
-        className="p-5 space-y-4"
-        style={{
-          background: "oklch(0.11 0.03 265)",
-          border: isDirty
-            ? "1px solid oklch(0.78 0.165 85 / 0.4)"
-            : "1px solid oklch(0.22 0.04 265)",
-          transition: "border-color 0.2s ease",
-        }}
-      >
-        <div
-          className="pb-3 mb-1"
-          style={{ borderBottom: "1px solid oklch(0.16 0.035 265)" }}
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h2
+          className="font-broadcast text-lg tracking-widest"
+          style={{ color: "oklch(0.78 0.165 85)" }}
         >
-          <span
-            className="font-broadcast text-xs tracking-widest"
-            style={{ color: "oklch(0.78 0.165 85)" }}
-          >
-            LEAGUE IDENTITY
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label
-              htmlFor="league-short-name"
-              className="block text-xs font-broadcast tracking-widest mb-1.5"
-              style={{ color: "oklch(0.45 0.02 90)" }}
-            >
-              LEAGUE SHORT NAME (e.g. SPL)
-            </label>
-            <input
-              id="league-short-name"
-              type="text"
-              value={config.shortName}
-              onChange={(e) => update("shortName", e.target.value)}
-              placeholder="SPL"
-              className={`w-full px-3 py-2 text-sm font-broadcast tracking-wider ${fieldFocusClass}`}
-              style={fieldStyle}
-            />
-          </div>
-          <div>
-            <label
-              htmlFor="league-full-name"
-              className="block text-xs font-broadcast tracking-widest mb-1.5"
-              style={{ color: "oklch(0.45 0.02 90)" }}
-            >
-              FULL LEAGUE NAME
-            </label>
-            <input
-              id="league-full-name"
-              type="text"
-              value={config.fullName}
-              onChange={(e) => update("fullName", e.target.value)}
-              placeholder="Siddhivinayak Premier League"
-              className={`w-full px-3 py-2 text-sm ${fieldFocusClass}`}
-              style={fieldStyle}
-            />
-          </div>
-        </div>
-
-        {/* Logo upload */}
-        <div>
-          <p
-            className="block text-xs font-broadcast tracking-widest mb-3"
-            style={{ color: "oklch(0.45 0.02 90)" }}
-          >
-            LEAGUE LOGO (displays free-form, no clipping)
-          </p>
-
-          <div className="flex gap-4 items-start">
-            {/* Preview area — free-form, no circle clip */}
-            <div
-              className="flex-shrink-0 flex items-center justify-center overflow-hidden"
+          PLAYER SETTINGS ({filteredPlayers.length})
+        </h2>
+        {/* Filter */}
+        <div className="flex gap-1">
+          {(
+            [["all", "ALL"], ...CATEGORIES.map((c) => [c.value, c.label])] as [
+              string,
+              string,
+            ][]
+          ).map(([val, lbl]) => (
+            <button
+              key={val}
+              type="button"
+              onClick={() => setFilter(val as typeof filter)}
+              className="px-3 py-1 font-broadcast tracking-wider text-xs transition-all"
               style={{
-                width: "120px",
-                height: "120px",
-                background: "oklch(0.085 0.025 265)",
-                border: "1px solid oklch(0.22 0.04 265)",
+                background:
+                  filter === val
+                    ? "oklch(0.78 0.165 85 / 0.2)"
+                    : "oklch(0.11 0.03 255 / 0.6)",
+                border:
+                  filter === val
+                    ? "1px solid oklch(0.78 0.165 85 / 0.6)"
+                    : "1px solid oklch(0.22 0.04 255 / 0.5)",
+                color:
+                  filter === val ? "oklch(0.88 0.16 82)" : "oklch(0.5 0.02 90)",
               }}
             >
-              {config.logoUrl ? (
-                <img
-                  src={config.logoUrl}
-                  alt="League logo preview"
-                  className="w-full h-full object-contain"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = "none";
-                  }}
-                />
-              ) : (
-                <div className="flex flex-col items-center gap-2">
-                  <Trophy size={28} style={{ color: "oklch(0.35 0.02 90)" }} />
-                  <span
-                    className="text-xs text-center"
-                    style={{ color: "oklch(0.35 0.02 90)" }}
-                  >
-                    No logo
-                  </span>
-                </div>
-              )}
-            </div>
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </div>
 
-            <div className="flex-1 space-y-3">
-              {/* URL input */}
-              <div>
-                <label
-                  htmlFor="league-logo-url"
-                  className="block text-xs font-broadcast tracking-widest mb-1.5"
-                  style={{ color: "oklch(0.38 0.02 90)" }}
-                >
-                  LOGO URL (or upload below)
-                </label>
-                <input
-                  id="league-logo-url"
-                  type="url"
-                  value={
-                    config.logoUrl.startsWith("data:") ? "" : config.logoUrl
-                  }
-                  onChange={(e) => update("logoUrl", e.target.value)}
-                  placeholder="https://example.com/logo.png"
-                  className={`w-full px-3 py-2 text-sm ${fieldFocusClass}`}
-                  style={{ ...fieldStyle, fontFamily: "inherit" }}
-                />
-              </div>
+      {/* Add player button */}
+      <button
+        type="button"
+        onClick={() => setShowAddForm((v) => !v)}
+        className="flex items-center gap-2 px-4 py-2 font-broadcast tracking-widest text-xs transition-all hover:opacity-90 active:scale-95"
+        style={{
+          background: "oklch(0.78 0.165 85 / 0.12)",
+          border: "1px solid oklch(0.78 0.165 85 / 0.4)",
+          color: "oklch(0.78 0.165 85)",
+        }}
+      >
+        <Plus size={13} />
+        ADD PLAYER
+      </button>
 
-              {/* Upload button */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleLogoUpload}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isUploading}
-                className="flex items-center gap-2 px-4 py-2.5 text-xs font-broadcast tracking-wider transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-                style={{
-                  background: isUploading
-                    ? "oklch(0.14 0.04 265)"
-                    : "oklch(0.12 0.03 265)",
-                  border: "1px solid oklch(0.78 0.165 85 / 0.35)",
-                  color: "oklch(0.78 0.165 85)",
-                }}
+      {/* Add form */}
+      <AnimatePresence>
+        {showAddForm && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden"
+          >
+            <div
+              className="p-4 space-y-3"
+              style={{
+                background: "oklch(0.10 0.03 255)",
+                border: "1px solid oklch(0.78 0.165 85 / 0.3)",
+              }}
+            >
+              <div
+                className="font-broadcast text-sm tracking-widest"
+                style={{ color: "oklch(0.78 0.165 85)" }}
               >
-                {isUploading ? (
-                  <>
-                    <Loader2 size={12} className="animate-spin" />
-                    UPLOADING {progress}%
-                  </>
-                ) : (
-                  <>
-                    <Upload size={12} />
-                    UPLOAD LOGO FROM DEVICE
-                  </>
-                )}
-              </button>
-
-              {/* Progress bar */}
-              {isUploading && (
-                <div
-                  className="h-0.5 overflow-hidden"
-                  style={{ background: "oklch(0.22 0.04 265)" }}
-                >
-                  <div
-                    className="h-full transition-all duration-200"
+                ADD NEW PLAYER
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <span
+                    className="font-broadcast tracking-widest"
+                    style={{ fontSize: 9, color: "oklch(0.45 0.02 90)" }}
+                  >
+                    NAME *
+                  </span>
+                  <input
+                    value={newPlayer.name}
+                    onChange={(e) =>
+                      setNewPlayer((p) => ({ ...p, name: e.target.value }))
+                    }
+                    className="w-full px-2 py-1.5 text-sm"
                     style={{
-                      width: `${progress}%`,
-                      background:
-                        "linear-gradient(90deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
+                      background: "oklch(0.13 0.03 255)",
+                      border: "1px solid oklch(0.22 0.05 255)",
+                      color: "oklch(0.88 0.02 90)",
+                      outline: "none",
+                    }}
+                    placeholder="Player name"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <span
+                    className="font-broadcast tracking-widest"
+                    style={{ fontSize: 9, color: "oklch(0.45 0.02 90)" }}
+                  >
+                    CATEGORY
+                  </span>
+                  <select
+                    value={newPlayer.category}
+                    onChange={(e) =>
+                      setNewPlayer((p) => ({
+                        ...p,
+                        category: e.target.value as IDBCategory,
+                      }))
+                    }
+                    className="w-full px-2 py-1.5 text-sm"
+                    style={{
+                      background: "oklch(0.13 0.03 255)",
+                      border: "1px solid oklch(0.22 0.05 255)",
+                      color: "oklch(0.88 0.02 90)",
+                      outline: "none",
+                    }}
+                  >
+                    {CATEGORIES.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <span
+                    className="font-broadcast tracking-widest"
+                    style={{ fontSize: 9, color: "oklch(0.45 0.02 90)" }}
+                  >
+                    BASE PRICE (PTS)
+                  </span>
+                  <input
+                    type="number"
+                    value={newPlayer.basePrice}
+                    onChange={(e) =>
+                      setNewPlayer((p) => ({ ...p, basePrice: e.target.value }))
+                    }
+                    className="w-full px-2 py-1.5 text-sm font-digital"
+                    style={{
+                      background: "oklch(0.13 0.03 255)",
+                      border: "1px solid oklch(0.22 0.05 255)",
+                      color: "oklch(0.88 0.02 90)",
+                      outline: "none",
                     }}
                   />
                 </div>
-              )}
-
-              <p className="text-xs" style={{ color: "oklch(0.38 0.02 90)" }}>
-                Logo is displayed without any shape clipping (free-form).
-                Recommended: transparent background PNG.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Size Controls */}
-        <div
-          className="pt-4"
-          style={{ borderTop: "1px solid oklch(0.16 0.035 265)" }}
-        >
-          <div className="mb-3">
-            <span
-              className="font-broadcast text-xs tracking-widest"
-              style={{ color: "oklch(0.78 0.165 85)" }}
-            >
-              SIZE CONTROLS
-            </span>
-            <p
-              className="text-xs mt-1"
-              style={{ color: "oklch(0.38 0.02 90)" }}
-            >
-              Adjust sizes of logo and text displayed on all screens
-            </p>
-          </div>
-          <div className="space-y-4">
-            {(
-              [
-                {
-                  key: "logoSize" as const,
-                  label: "LOGO SIZE",
-                  min: 50,
-                  max: 200,
-                },
-                {
-                  key: "shortNameSize" as const,
-                  label: "SHORT NAME SIZE",
-                  min: 50,
-                  max: 200,
-                },
-                {
-                  key: "fullNameSize" as const,
-                  label: "FULL NAME SIZE",
-                  min: 50,
-                  max: 200,
-                },
-              ] as const
-            ).map(({ key, label, min, max }) => (
-              <div key={key}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label
-                    htmlFor={`league-size-${key}`}
-                    className="text-xs font-broadcast tracking-widest"
-                    style={{ color: "oklch(0.45 0.02 90)" }}
-                  >
-                    {label}
-                  </label>
+                <div className="space-y-1">
                   <span
-                    className="font-digital text-sm"
-                    style={{ color: "oklch(0.78 0.165 85)" }}
+                    className="font-broadcast tracking-widest"
+                    style={{ fontSize: 9, color: "oklch(0.45 0.02 90)" }}
                   >
-                    {config[key]}%
+                    RATING (1-5)
                   </span>
-                </div>
-                <input
-                  id={`league-size-${key}`}
-                  type="range"
-                  min={min}
-                  max={max}
-                  step={5}
-                  value={config[key]}
-                  onChange={(e) => update(key, Number(e.target.value))}
-                  className="w-full h-1.5 appearance-none cursor-pointer rounded-full"
-                  style={{
-                    background: `linear-gradient(to right, oklch(0.78 0.165 85) 0%, oklch(0.78 0.165 85) ${((config[key] - min) / (max - min)) * 100}%, oklch(0.22 0.04 265) ${((config[key] - min) / (max - min)) * 100}%, oklch(0.22 0.04 265) 100%)`,
-                    accentColor: "oklch(0.78 0.165 85)",
-                  }}
-                />
-                <div
-                  className="flex justify-between text-xs mt-0.5"
-                  style={{ color: "oklch(0.3 0.02 90)" }}
-                >
-                  <span>{min}%</span>
-                  <span>{max}%</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={5}
+                    value={newPlayer.rating}
+                    onChange={(e) =>
+                      setNewPlayer((p) => ({ ...p, rating: e.target.value }))
+                    }
+                    className="w-full px-2 py-1.5 text-sm font-digital"
+                    style={{
+                      background: "oklch(0.13 0.03 255)",
+                      border: "1px solid oklch(0.22 0.05 255)",
+                      color: "oklch(0.88 0.02 90)",
+                      outline: "none",
+                    }}
+                  />
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
+              {/* Photo upload */}
+              <div className="flex items-center gap-3 flex-wrap">
+                {newPlayer.imageUrl && (
+                  <img
+                    src={newPlayer.imageUrl}
+                    alt="preview"
+                    style={{
+                      width: 48,
+                      height: 60,
+                      objectFit: "cover",
+                      border: "1px solid oklch(0.78 0.165 85 / 0.3)",
+                    }}
+                  />
+                )}
+                <label
+                  className="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 text-xs font-broadcast tracking-wider hover:opacity-80"
+                  style={{
+                    background: "oklch(0.78 0.165 85 / 0.12)",
+                    border: "1px solid oklch(0.78 0.165 85 / 0.4)",
+                    color: "oklch(0.78 0.165 85)",
+                  }}
+                >
+                  <Upload size={12} />
+                  UPLOAD PHOTO
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleImageFile(f, null);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                <span style={{ fontSize: 10, color: "oklch(0.4 0.02 90)" }}>
+                  or paste URL:
+                </span>
+                <input
+                  value={newPlayer.imageUrl}
+                  onChange={(e) =>
+                    setNewPlayer((p) => ({ ...p, imageUrl: e.target.value }))
+                  }
+                  placeholder="https://..."
+                  className="flex-1 px-2 py-1.5 text-xs"
+                  style={{
+                    background: "oklch(0.13 0.03 255)",
+                    border: "1px solid oklch(0.22 0.05 255)",
+                    color: "oklch(0.88 0.02 90)",
+                    outline: "none",
+                  }}
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={addPlayer}
+                  disabled={addSaving}
+                  className="flex items-center gap-2 px-5 py-1.5 font-broadcast tracking-widest text-xs transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
+                  style={{
+                    background:
+                      "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
+                    color: "oklch(0.08 0.02 265)",
+                  }}
+                >
+                  {addSaving ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <Plus size={12} />
+                  )}
+                  ADD PLAYER
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAddForm(false)}
+                  className="px-4 py-1.5 font-broadcast tracking-widest text-xs transition-all hover:opacity-70"
+                  style={{
+                    background: "oklch(0.11 0.03 255)",
+                    border: "1px solid oklch(0.22 0.04 255)",
+                    color: "oklch(0.55 0.02 90)",
+                  }}
+                >
+                  CANCEL
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-        {/* Save */}
-        <div
-          className="pt-3 flex justify-end"
-          style={{ borderTop: "1px solid oklch(0.16 0.035 265)" }}
-        >
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={isSaving || !isDirty}
-            className="flex items-center gap-2 px-5 py-2.5 text-sm font-broadcast tracking-wider transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{
-              background: isDirty
-                ? "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))"
-                : "oklch(0.14 0.04 265)",
-              color: isDirty ? "oklch(0.08 0.025 265)" : "oklch(0.45 0.02 90)",
-              border: isDirty ? "none" : "1px solid oklch(0.22 0.04 265)",
-            }}
-          >
-            {isSaving ? (
-              <Loader2 size={13} className="animate-spin" />
-            ) : (
-              <Save size={13} />
-            )}
-            {isSaving ? "SAVING…" : "SAVE LEAGUE SETTINGS"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+      {/* Player list */}
+      <div className="space-y-2">
+        {filteredPlayers.map((player) => {
+          const id = String(player.id);
+          const edit = edits[id];
+          if (!edit) return null;
+          return (
+            <div
+              key={id}
+              style={{
+                background: "oklch(0.10 0.025 255)",
+                border: "1px solid oklch(0.22 0.04 255 / 0.6)",
+              }}
+            >
+              {/* Header row */}
+              <button
+                type="button"
+                className="flex items-center gap-3 px-3 py-2 cursor-pointer select-none w-full text-left"
+                onClick={() => setEdit(id, { expanded: !edit.expanded })}
+              >
+                {edit.imageUrl ? (
+                  <img
+                    src={edit.imageUrl}
+                    alt={edit.name}
+                    style={{
+                      width: 36,
+                      height: 44,
+                      objectFit: "cover",
+                      flexShrink: 0,
+                    }}
+                  />
+                ) : (
+                  <div
+                    className="flex items-center justify-center font-broadcast font-black"
+                    style={{
+                      width: 36,
+                      height: 44,
+                      background: "oklch(0.14 0.04 255)",
+                      color: "oklch(0.35 0.02 90)",
+                      fontSize: 14,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {player.name[0]?.toUpperCase()}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div
+                    className="font-broadcast tracking-wider truncate"
+                    style={{ fontSize: 13, color: "oklch(0.85 0.015 90)" }}
+                  >
+                    {edit.name}
+                  </div>
+                  <div
+                    className="font-broadcast tracking-widest"
+                    style={{ fontSize: 9, color: "oklch(0.42 0.02 90)" }}
+                  >
+                    {edit.category.toUpperCase()} · {edit.basePrice} PTS · ★
+                    {edit.rating}
+                  </div>
+                </div>
+                <span
+                  className="font-broadcast text-xs tracking-widest px-2 py-0.5"
+                  style={{
+                    background:
+                      player.status === "sold"
+                        ? "oklch(0.55 0.15 140 / 0.2)"
+                        : player.status === "live"
+                          ? "oklch(0.78 0.165 85 / 0.15)"
+                          : "oklch(0.28 0.05 255 / 0.4)",
+                    color:
+                      player.status === "sold"
+                        ? "oklch(0.7 0.18 140)"
+                        : player.status === "live"
+                          ? "oklch(0.88 0.16 82)"
+                          : "oklch(0.5 0.02 90)",
+                    fontSize: 9,
+                  }}
+                >
+                  {player.status.toUpperCase()}
+                </span>
+                {edit.expanded ? (
+                  <ChevronUp
+                    size={14}
+                    style={{ color: "oklch(0.45 0.02 90)", flexShrink: 0 }}
+                  />
+                ) : (
+                  <ChevronDown
+                    size={14}
+                    style={{ color: "oklch(0.45 0.02 90)", flexShrink: 0 }}
+                  />
+                )}
+              </button>
 
-// ─── Live Layout Slider ───────────────────────────────────────────────────────
-
-function LayoutSlider({
-  id,
-  label,
-  value,
-  min,
-  max,
-  step,
-  unit,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  unit: string;
-  onChange: (v: number) => void;
-}) {
-  const pct = ((value - min) / (max - min)) * 100;
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <label
-          htmlFor={id}
-          className="text-xs font-broadcast tracking-widest"
-          style={{ color: "oklch(0.45 0.02 90)" }}
-        >
-          {label}
-        </label>
-        <span
-          className="font-digital text-sm"
-          style={{ color: "oklch(0.78 0.165 85)" }}
-        >
-          {value}
-          {unit}
-        </span>
-      </div>
-      <input
-        id={id}
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full h-1.5 appearance-none cursor-pointer rounded-full"
-        style={{
-          background: `linear-gradient(to right, oklch(0.78 0.165 85) 0%, oklch(0.78 0.165 85) ${pct}%, oklch(0.22 0.04 265) ${pct}%, oklch(0.22 0.04 265) 100%)`,
-          accentColor: "oklch(0.78 0.165 85)",
-        }}
-      />
-      <div
-        className="flex justify-between text-xs mt-0.5"
-        style={{ color: "oklch(0.3 0.02 90)" }}
-      >
-        <span>
-          {min}
-          {unit}
-        </span>
-        <span>
-          {max}
-          {unit}
-        </span>
+              {/* Expanded edit form */}
+              {edit.expanded && (
+                <div
+                  className="px-3 pb-3 pt-1 space-y-3 border-t"
+                  style={{ borderColor: "oklch(0.18 0.04 255 / 0.5)" }}
+                >
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <span
+                        className="font-broadcast tracking-widest"
+                        style={{ fontSize: 9, color: "oklch(0.45 0.02 90)" }}
+                      >
+                        NAME
+                      </span>
+                      <input
+                        value={edit.name}
+                        onChange={(e) => setEdit(id, { name: e.target.value })}
+                        className="w-full px-2 py-1.5 text-sm"
+                        style={{
+                          background: "oklch(0.13 0.03 255)",
+                          border: "1px solid oklch(0.22 0.05 255)",
+                          color: "oklch(0.88 0.02 90)",
+                          outline: "none",
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <span
+                        className="font-broadcast tracking-widest"
+                        style={{ fontSize: 9, color: "oklch(0.45 0.02 90)" }}
+                      >
+                        CATEGORY
+                      </span>
+                      <select
+                        value={edit.category}
+                        onChange={(e) =>
+                          setEdit(id, {
+                            category: e.target.value as IDBCategory,
+                          })
+                        }
+                        className="w-full px-2 py-1.5 text-sm"
+                        style={{
+                          background: "oklch(0.13 0.03 255)",
+                          border: "1px solid oklch(0.22 0.05 255)",
+                          color: "oklch(0.88 0.02 90)",
+                          outline: "none",
+                        }}
+                      >
+                        {CATEGORIES.map((c) => (
+                          <option key={c.value} value={c.value}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <span
+                        className="font-broadcast tracking-widest"
+                        style={{ fontSize: 9, color: "oklch(0.45 0.02 90)" }}
+                      >
+                        BASE PRICE
+                      </span>
+                      <input
+                        type="number"
+                        value={edit.basePrice}
+                        onChange={(e) =>
+                          setEdit(id, { basePrice: e.target.value })
+                        }
+                        className="w-full px-2 py-1.5 text-sm font-digital"
+                        style={{
+                          background: "oklch(0.13 0.03 255)",
+                          border: "1px solid oklch(0.22 0.05 255)",
+                          color: "oklch(0.88 0.02 90)",
+                          outline: "none",
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <span
+                        className="font-broadcast tracking-widest"
+                        style={{ fontSize: 9, color: "oklch(0.45 0.02 90)" }}
+                      >
+                        RATING (1-5)
+                      </span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={5}
+                        value={edit.rating}
+                        onChange={(e) =>
+                          setEdit(id, { rating: e.target.value })
+                        }
+                        className="w-full px-2 py-1.5 text-sm font-digital"
+                        style={{
+                          background: "oklch(0.13 0.03 255)",
+                          border: "1px solid oklch(0.22 0.05 255)",
+                          color: "oklch(0.88 0.02 90)",
+                          outline: "none",
+                        }}
+                      />
+                    </div>
+                  </div>
+                  {/* Photo */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    {edit.imageUrl && (
+                      <img
+                        src={edit.imageUrl}
+                        alt="preview"
+                        style={{
+                          width: 44,
+                          height: 56,
+                          objectFit: "cover",
+                          border: "1px solid oklch(0.78 0.165 85 / 0.3)",
+                        }}
+                      />
+                    )}
+                    <label
+                      className="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 text-xs font-broadcast tracking-wider hover:opacity-80"
+                      style={{
+                        background: "oklch(0.78 0.165 85 / 0.12)",
+                        border: "1px solid oklch(0.78 0.165 85 / 0.4)",
+                        color: "oklch(0.78 0.165 85)",
+                      }}
+                    >
+                      <Upload size={12} />
+                      UPLOAD PHOTO
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) handleImageFile(f, id);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                    <span style={{ fontSize: 10, color: "oklch(0.4 0.02 90)" }}>
+                      or URL:
+                    </span>
+                    <input
+                      value={edit.imageUrl}
+                      onChange={(e) =>
+                        setEdit(id, { imageUrl: e.target.value })
+                      }
+                      placeholder="https://..."
+                      className="flex-1 min-w-0 px-2 py-1.5 text-xs"
+                      style={{
+                        background: "oklch(0.13 0.03 255)",
+                        border: "1px solid oklch(0.22 0.05 255)",
+                        color: "oklch(0.88 0.02 90)",
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  {/* Actions */}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => savePlayer(player)}
+                      disabled={edit.saving}
+                      className="flex items-center gap-2 px-4 py-1.5 font-broadcast tracking-widest text-xs transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
+                      style={{
+                        background:
+                          "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
+                        color: "oklch(0.08 0.02 265)",
+                      }}
+                    >
+                      {edit.saving ? (
+                        <Loader2 size={11} className="animate-spin" />
+                      ) : (
+                        <Save size={11} />
+                      )}
+                      SAVE
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deletePlayer(player)}
+                      className="flex items-center gap-2 px-3 py-1.5 font-broadcast tracking-widest text-xs transition-all hover:opacity-90"
+                      style={{
+                        background: "oklch(0.65 0.18 25 / 0.15)",
+                        border: "1px solid oklch(0.65 0.18 25 / 0.4)",
+                        color: "oklch(0.75 0.18 25)",
+                      }}
+                    >
+                      <Trash2 size={11} />
+                      DELETE
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
 // ─── Live Layout Tab ──────────────────────────────────────────────────────────
-
-function LiveLayoutTab() {
-  const [layout, setLayout] = useState<LiveLayoutConfig>(getLiveLayout);
-  const [isSaved, setIsSaved] = useState(false);
-
-  const update = (key: keyof LiveLayoutConfig, val: number) => {
-    setLayout((prev) => ({ ...prev, [key]: val }));
-    setIsSaved(false);
-  };
-
-  const handleSave = () => {
-    localStorage.setItem(LIVE_LAYOUT_KEY, JSON.stringify(layout));
-    setIsSaved(true);
-    toast.success("Live layout saved — refresh /live to apply", {
-      description: "Open the Live screen to see the updated layout.",
-    });
-  };
-
-  const handleReset = () => {
-    setLayout({ ...DEFAULT_LIVE_LAYOUT });
-    setIsSaved(false);
-    toast.info("Reset to default layout");
-  };
-
-  // Preview scale: We'll show at 45% scale
-  const SCALE = 0.45;
-  // Full preview container size (the unscaled mock)
-  const MOCK_W = 1100;
-  const MOCK_H = 620;
-
-  const sliderSections = [
-    {
-      title: "PLAYER SECTION",
-      sliders: [
-        {
-          key: "playerImageWidth" as const,
-          label: "IMAGE WIDTH",
-          min: 80,
-          max: 400,
-          step: 8,
-          unit: "px",
-        },
-        {
-          key: "playerImageHeight" as const,
-          label: "IMAGE HEIGHT",
-          min: 100,
-          max: 500,
-          step: 8,
-          unit: "px",
-        },
-        {
-          key: "playerNameSize" as const,
-          label: "NAME SIZE",
-          min: 50,
-          max: 200,
-          step: 5,
-          unit: "%",
-        },
-        {
-          key: "categoryBadgeSize" as const,
-          label: "CATEGORY BADGE SIZE",
-          min: 50,
-          max: 200,
-          step: 5,
-          unit: "%",
-        },
-      ],
-    },
-    {
-      title: "BID COUNTER",
-      sliders: [
-        {
-          key: "bidCounterSize" as const,
-          label: "BID COUNTER SIZE",
-          min: 50,
-          max: 200,
-          step: 5,
-          unit: "%",
-        },
-        {
-          key: "leadingTeamSize" as const,
-          label: "LEADING TEAM TEXT",
-          min: 50,
-          max: 200,
-          step: 5,
-          unit: "%",
-        },
-      ],
-    },
-    {
-      title: "TEAM PANEL",
-      sliders: [
-        {
-          key: "rightPanelWidth" as const,
-          label: "PANEL WIDTH",
-          min: 200,
-          max: 600,
-          step: 8,
-          unit: "px",
-        },
-        {
-          key: "teamTableFontSize" as const,
-          label: "TABLE FONT SIZE",
-          min: 50,
-          max: 200,
-          step: 5,
-          unit: "%",
-        },
-        {
-          key: "chartHeight" as const,
-          label: "CHART HEIGHT",
-          min: 100,
-          max: 400,
-          step: 10,
-          unit: "px",
-        },
-      ],
-    },
-    {
-      title: "HEADER",
-      sliders: [
-        {
-          key: "headerLogoSize" as const,
-          label: "HEADER LOGO SIZE",
-          min: 20,
-          max: 120,
-          step: 4,
-          unit: "px",
-        },
-      ],
-    },
-  ];
-
-  return (
-    <div className="space-y-4">
-      <div
-        className="px-1 flex items-center gap-2 text-xs"
-        style={{ color: "oklch(0.45 0.02 90)" }}
-      >
-        <Monitor size={12} />
-        <span>
-          Adjust sizes of elements on the live broadcast screen. Changes preview
-          instantly.
-        </span>
-      </div>
-
-      <div className="flex flex-col xl:flex-row gap-4">
-        {/* ── Settings Panel (left) ── */}
-        <div
-          className="xl:w-[380px] flex-shrink-0 space-y-4"
-          style={{
-            background: "oklch(0.11 0.03 265)",
-            border: "1px solid oklch(0.22 0.04 265)",
-          }}
-        >
-          {/* Sticky action row */}
-          <div
-            className="sticky top-0 z-10 flex items-center justify-between px-4 py-3"
-            style={{
-              background: "oklch(0.11 0.03 265)",
-              borderBottom: "1px solid oklch(0.16 0.035 265)",
-            }}
-          >
-            <span
-              className="font-broadcast text-xs tracking-widest"
-              style={{ color: "oklch(0.78 0.165 85)" }}
-            >
-              LAYOUT CONTROLS
-            </span>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={handleReset}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-broadcast tracking-wider transition-all hover:opacity-80"
-                style={{
-                  background: "oklch(0.14 0.04 265)",
-                  border: "1px solid oklch(0.22 0.04 265)",
-                  color: "oklch(0.55 0.02 90)",
-                }}
-              >
-                <RotateCcw size={11} />
-                RESET
-              </button>
-              <button
-                type="button"
-                onClick={handleSave}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-broadcast tracking-wider transition-all hover:opacity-90"
-                style={{
-                  background: isSaved
-                    ? "oklch(0.7 0.15 140 / 0.2)"
-                    : "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
-                  border: isSaved
-                    ? "1px solid oklch(0.7 0.15 140 / 0.4)"
-                    : "none",
-                  color: isSaved
-                    ? "oklch(0.7 0.15 140)"
-                    : "oklch(0.08 0.025 265)",
-                }}
-              >
-                <Save size={11} />
-                {isSaved ? "SAVED" : "SAVE LAYOUT"}
-              </button>
-            </div>
-          </div>
-
-          <div className="px-4 pb-4 space-y-5">
-            {sliderSections.map((section) => (
-              <div key={section.title}>
-                <div
-                  className="pb-2 mb-3"
-                  style={{ borderBottom: "1px solid oklch(0.16 0.035 265)" }}
-                >
-                  <span
-                    className="font-broadcast text-xs tracking-widest"
-                    style={{ color: "oklch(0.78 0.165 85 / 0.7)" }}
-                  >
-                    {section.title}
-                  </span>
-                </div>
-                <div className="space-y-3">
-                  {section.sliders.map((s) => (
-                    <LayoutSlider
-                      key={s.key}
-                      id={`layout-slider-${s.key}`}
-                      label={s.label}
-                      value={layout[s.key]}
-                      min={s.min}
-                      max={s.max}
-                      step={s.step}
-                      unit={s.unit}
-                      onChange={(v) => update(s.key, v)}
-                    />
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* ── Live Preview (right) ── */}
-        <div className="flex-1 min-w-0">
-          <div
-            className="mb-2 flex items-center gap-2 px-1"
-            style={{ color: "oklch(0.45 0.02 90)" }}
-          >
-            <Monitor size={12} />
-            <span className="text-xs font-broadcast tracking-wider">
-              LIVE PREVIEW (scaled)
-            </span>
-          </div>
-          <div
-            className="overflow-hidden relative"
-            style={{
-              width: "100%",
-              height: `${MOCK_H * SCALE}px`,
-              background: "oklch(0.07 0.025 265)",
-              border: "1px solid oklch(0.22 0.04 265)",
-            }}
-          >
-            {/* The mock — rendered at full size, then scaled */}
-            <div
-              style={{
-                width: `${MOCK_W}px`,
-                height: `${MOCK_H}px`,
-                transform: `scale(${SCALE})`,
-                transformOrigin: "top left",
-                background: "oklch(0.07 0.025 265)",
-                position: "absolute",
-                top: 0,
-                left: 0,
-                overflow: "hidden",
-              }}
-            >
-              {/* Mock header */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "0 24px",
-                  height: "52px",
-                  background: "oklch(0.09 0.03 265 / 0.95)",
-                  borderBottom: "1px solid oklch(0.78 0.165 85 / 0.25)",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  {/* Logo placeholder */}
-                  <div
-                    style={{
-                      width: layout.headerLogoSize,
-                      height: layout.headerLogoSize,
-                      background: "oklch(0.78 0.165 85 / 0.2)",
-                      border: "1px solid oklch(0.78 0.165 85 / 0.4)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: Math.max(8, layout.headerLogoSize * 0.35),
-                      fontFamily: "monospace",
-                      color: "oklch(0.78 0.165 85)",
-                      flexShrink: 0,
-                    }}
-                  >
-                    SPL
-                  </div>
-                  <div>
-                    <div
-                      style={{
-                        fontFamily: "monospace",
-                        fontSize: 18 * (layout.headerLogoSize / 36),
-                        color: "oklch(0.78 0.165 85)",
-                        fontWeight: 700,
-                      }}
-                    >
-                      SPL
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 10,
-                        color: "oklch(0.45 0.02 90)",
-                        letterSpacing: "0.08em",
-                      }}
-                    >
-                      SIDDHIVINAYAK PREMIER LEAGUE
-                    </div>
-                  </div>
-                </div>
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontFamily: "monospace",
-                    padding: "4px 12px",
-                    background: "oklch(0.78 0.165 85 / 0.1)",
-                    border: "1px solid oklch(0.78 0.165 85 / 0.3)",
-                    color: "oklch(0.78 0.165 85)",
-                    letterSpacing: "0.1em",
-                  }}
-                >
-                  PLAYER AUCTION 2025
-                </div>
-              </div>
-
-              {/* Mock main content */}
-              <div
-                style={{
-                  display: "flex",
-                  height: `${MOCK_H - 52}px`,
-                }}
-              >
-                {/* Center player section */}
-                <div
-                  style={{
-                    flex: 1,
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    padding: "16px",
-                    gap: 12,
-                  }}
-                >
-                  {/* Player image placeholder */}
-                  <div
-                    style={{
-                      width: layout.playerImageWidth,
-                      height: layout.playerImageHeight,
-                      background: "oklch(0.15 0.04 265)",
-                      border: "2px solid oklch(0.78 0.165 85 / 0.6)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexShrink: 0,
-                    }}
-                  >
-                    <div
-                      style={{
-                        color: "oklch(0.35 0.02 90)",
-                        fontSize: 13,
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      PLAYER PHOTO
-                    </div>
-                  </div>
-
-                  {/* Player name */}
-                  <div
-                    style={{
-                      fontSize: 32 * (layout.playerNameSize / 100),
-                      fontFamily: "monospace",
-                      color: "oklch(0.97 0.01 90)",
-                      fontWeight: 700,
-                      letterSpacing: "-0.01em",
-                    }}
-                  >
-                    Virat Kohli
-                  </div>
-
-                  {/* Category badge */}
-                  <div
-                    style={{
-                      fontSize: 12 * (layout.categoryBadgeSize / 100),
-                      fontFamily: "monospace",
-                      padding: "3px 10px",
-                      background: "oklch(0.7 0.15 140 / 0.15)",
-                      border: "1px solid oklch(0.7 0.15 140 / 0.4)",
-                      color: "oklch(0.7 0.15 140)",
-                      letterSpacing: "0.1em",
-                    }}
-                  >
-                    BATSMAN
-                  </div>
-
-                  {/* Bid counter */}
-                  <div
-                    style={{
-                      background: "oklch(0.065 0.025 265)",
-                      border: "1px solid oklch(0.78 0.165 85 / 0.2)",
-                      padding: "12px 20px",
-                      textAlign: "center",
-                      minWidth: 220,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: 8,
-                        fontFamily: "monospace",
-                        color: "oklch(0.38 0.02 90)",
-                        letterSpacing: "0.15em",
-                        marginBottom: 4,
-                      }}
-                    >
-                      CURRENT BID
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 72 * (layout.bidCounterSize / 100),
-                        fontFamily: "monospace",
-                        color: "oklch(0.82 0.17 87)",
-                        fontWeight: 800,
-                        lineHeight: 1,
-                      }}
-                    >
-                      2,500
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 14 * (layout.leadingTeamSize / 100),
-                        fontFamily: "monospace",
-                        color: "oklch(0.85 0.165 85)",
-                        letterSpacing: "0.06em",
-                        marginTop: 6,
-                        fontWeight: 600,
-                      }}
-                    >
-                      ▸ LEADING: MUMBAI WARRIORS
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right panel */}
-                <div
-                  style={{
-                    width: layout.rightPanelWidth,
-                    flexShrink: 0,
-                    background: "oklch(0.085 0.025 265)",
-                    borderLeft: "1px solid oklch(0.78 0.165 85 / 0.18)",
-                    display: "flex",
-                    flexDirection: "column",
-                    overflow: "hidden",
-                  }}
-                >
-                  {/* Table header */}
-                  <div
-                    style={{
-                      padding: "8px 12px",
-                      borderBottom: "1px solid oklch(0.16 0.035 265)",
-                      fontSize: 9,
-                      fontFamily: "monospace",
-                      color: "oklch(0.78 0.165 85)",
-                      letterSpacing: "0.1em",
-                    }}
-                  >
-                    TEAM PURSE
-                  </div>
-
-                  {/* Mock table rows */}
-                  <div style={{ flex: 1, overflow: "hidden" }}>
-                    {[
-                      { name: "Mumbai Warriors", purse: "19,200", slots: 5 },
-                      { name: "Chennai Kings", purse: "17,500", slots: 4 },
-                      { name: "Delhi Capitals", purse: "15,300", slots: 6 },
-                      { name: "Bangalore", purse: "13,800", slots: 3 },
-                      { name: "Kolkata KR", purse: "12,100", slots: 5 },
-                      { name: "Punjab Kings", purse: "18,900", slots: 7 },
-                      { name: "Hyderabad", purse: "16,400", slots: 4 },
-                      { name: "Jaipur Royals", purse: "14,700", slots: 6 },
-                    ].map((row, i) => (
-                      <div
-                        key={row.name}
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          padding: "4px 12px",
-                          fontSize: 10 * (layout.teamTableFontSize / 100),
-                          fontFamily: "monospace",
-                          borderBottom: "1px solid oklch(0.12 0.025 265)",
-                          background:
-                            i === 0
-                              ? "oklch(0.78 0.165 85 / 0.07)"
-                              : "transparent",
-                          color:
-                            i === 0
-                              ? "oklch(0.88 0.14 87)"
-                              : "oklch(0.65 0.02 90)",
-                        }}
-                      >
-                        <span
-                          style={{
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                            maxWidth: layout.rightPanelWidth * 0.45,
-                          }}
-                        >
-                          {row.name}
-                        </span>
-                        <span>{row.purse}</span>
-                        <span style={{ color: "oklch(0.65 0.18 25)" }}>
-                          {row.slots}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Mock chart */}
-                  <div
-                    style={{
-                      height: layout.chartHeight,
-                      padding: "8px 12px",
-                      borderTop: "1px solid oklch(0.16 0.035 265)",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 4,
-                      overflow: "hidden",
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: 9,
-                        fontFamily: "monospace",
-                        color: "oklch(0.78 0.165 85)",
-                        letterSpacing: "0.1em",
-                        marginBottom: 4,
-                      }}
-                    >
-                      PURSE REMAINING
-                    </div>
-                    {[85, 70, 65, 60, 55, 80, 72, 66].map((pct, i) => (
-                      <div
-                        // biome-ignore lint/suspicious/noArrayIndexKey: static mock data
-                        key={i}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 6,
-                          flex: 1,
-                          minHeight: 0,
-                        }}
-                      >
-                        <div
-                          style={{
-                            height: "100%",
-                            width: `${pct}%`,
-                            background:
-                              i === 0
-                                ? "oklch(0.78 0.165 85)"
-                                : "oklch(0.32 0.07 265)",
-                            borderRadius: "0 2px 2px 0",
-                            minHeight: 4,
-                            maxHeight: 14,
-                          }}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <p className="text-xs mt-2" style={{ color: "oklch(0.35 0.02 90)" }}>
-            Preview updates in real time. Click{" "}
-            <strong style={{ color: "oklch(0.78 0.165 85)" }}>
-              SAVE LAYOUT
-            </strong>{" "}
-            to apply, then refresh the /live page.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
+interface LayoutSliderConfig {
+  key: keyof LiveLayoutConfig;
+  label: string;
+  min: number;
+  max: number;
+  unit?: string;
 }
 
-// ─── Team Row ────────────────────────────────────────────────────────────────
+const LAYOUT_SLIDERS: LayoutSliderConfig[] = [
+  {
+    key: "playerImageWidth",
+    label: "Player Image Width",
+    min: 100,
+    max: 400,
+    unit: "px",
+  },
+  {
+    key: "playerImageHeight",
+    label: "Player Image Height",
+    min: 120,
+    max: 500,
+    unit: "px",
+  },
+  {
+    key: "playerNameSize",
+    label: "Player Name Size",
+    min: 50,
+    max: 200,
+    unit: "%",
+  },
+  {
+    key: "categoryBadgeSize",
+    label: "Category Badge Size",
+    min: 50,
+    max: 200,
+    unit: "%",
+  },
+  {
+    key: "bidCounterSize",
+    label: "Bid Counter Size",
+    min: 50,
+    max: 200,
+    unit: "%",
+  },
+  {
+    key: "leadingTeamSize",
+    label: "Leading Team Size",
+    min: 50,
+    max: 200,
+    unit: "%",
+  },
+  {
+    key: "rightPanelWidth",
+    label: "Right Panel Width",
+    min: 240,
+    max: 600,
+    unit: "px",
+  },
+  {
+    key: "teamTableFontSize",
+    label: "Team Table Font",
+    min: 50,
+    max: 200,
+    unit: "%",
+  },
+  { key: "chartHeight", label: "Chart Height", min: 80, max: 400, unit: "px" },
+  {
+    key: "headerLogoSize",
+    label: "Header Logo Size",
+    min: 20,
+    max: 80,
+    unit: "px",
+  },
+];
 
-function TeamRow({
-  team,
-  onSave,
-}: {
-  team: Team;
-  onSave: (
-    id: bigint,
-    data: {
-      name: string;
-      ownerName: string;
-      iconPlayerName: string;
-      newPurse: bigint | null;
-    },
-  ) => Promise<void>;
-}) {
-  const originalPurse = Number(team.purse_remaining);
-  const teamLogos = getTeamLogos();
+function LiveLayoutTab() {
+  const { actor } = useActor();
+  const [layout, setLayout] = useState<LiveLayoutConfig>(getLiveLayout);
+  const [saved, setSaved] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
 
-  const [state, setState] = useState<TeamEditState>({
-    name: team.name,
-    ownerName: team.owner_name,
-    iconPlayerName: team.icon_player_name,
-    purse: String(originalPurse),
-    logoUrl: teamLogos[String(team.id)] ?? "",
-    isDirty: false,
-    isSaving: false,
-  });
-  const logoFileInputRef = useRef<HTMLInputElement>(null);
-  const {
-    uploadImage,
-    isUploading: isLogoUploading,
-    progress: logoProgress,
-  } = useImageUpload();
-
-  const update = (
-    key: keyof Omit<TeamEditState, "isDirty" | "isSaving">,
-    val: string,
-  ) => {
-    setState((prev) => ({ ...prev, [key]: val, isDirty: true }));
-  };
-
-  const handleLogoFileChange = async (
-    e: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = "";
-    try {
-      const url = await uploadImage(file);
-      setState((prev) => ({ ...prev, logoUrl: url, isDirty: true }));
-      toast.success("Team logo uploaded");
-    } catch {
-      toast.error("Logo upload failed");
+  const save = async () => {
+    localStorage.setItem(LIVE_LAYOUT_KEY, JSON.stringify(layout));
+    // Also save to IDB
+    await idbStore.setSetting(LIVE_LAYOUT_KEY, JSON.stringify(layout));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+    toast.success("Live layout saved — refresh /live to apply");
+    // Background sync to backend
+    if (actor) {
+      setSyncing(true);
+      const [logosRaw, ownerRaw, iconRaw, leagueRaw] = await Promise.all([
+        idbStore.getSetting("spl_team_logos"),
+        idbStore.getSetting("spl_owner_photos"),
+        idbStore.getSetting("spl_icon_photos"),
+        idbStore.getSetting("spl_league_settings"),
+      ]);
+      const allSettings: AllSettings = {
+        league: leagueRaw
+          ? (JSON.parse(leagueRaw) as LeagueSettings)
+          : getLeagueSettings(),
+        teamLogos: logosRaw
+          ? (JSON.parse(logosRaw) as Record<string, string>)
+          : {},
+        ownerPhotos: ownerRaw
+          ? (JSON.parse(ownerRaw) as Record<string, string>)
+          : {},
+        iconPhotos: iconRaw
+          ? (JSON.parse(iconRaw) as Record<string, string>)
+          : {},
+        liveColors: getLiveColors(),
+        liveLayout: layout,
+      };
+      saveSettingsToBackend(actor, allSettings).finally(() => {
+        setSyncing(false);
+      });
     }
   };
 
-  const handleSave = async () => {
-    setState((prev) => ({ ...prev, isSaving: true }));
-    const newPurse = Number.parseInt(state.purse, 10);
-    const purseChanged = !Number.isNaN(newPurse) && newPurse !== originalPurse;
-
-    // Save logo to localStorage
-    if (state.logoUrl !== (teamLogos[String(team.id)] ?? "")) {
-      const logos = getTeamLogos();
-      logos[String(team.id)] = state.logoUrl;
-      saveTeamLogos(logos);
-    }
-
-    await onSave(team.id, {
-      name: state.name.trim(),
-      ownerName: state.ownerName.trim(),
-      iconPlayerName: state.iconPlayerName.trim(),
-      newPurse: purseChanged ? BigInt(newPurse) : null,
-    });
-    setState((prev) => ({ ...prev, isSaving: false, isDirty: false }));
+  const reset = () => {
+    setLayout({ ...DEFAULT_LIVE_LAYOUT });
+    toast.info("Reset to defaults (not saved yet)");
   };
-
-  const remainingSlots = 7 - Number(team.players_bought);
 
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="relative"
-      style={{
-        background: "oklch(0.11 0.03 265)",
-        border: state.isDirty
-          ? "1px solid oklch(0.78 0.165 85 / 0.4)"
-          : "1px solid oklch(0.22 0.04 265)",
-        transition: "border-color 0.2s ease",
-      }}
-    >
-      {/* Header bar */}
-      <div
-        className="flex items-center justify-between px-4 py-3"
-        style={{ borderBottom: "1px solid oklch(0.16 0.035 265)" }}
-      >
-        <div className="flex items-center gap-3">
-          {/* Team logo preview (circle) */}
-          <div
-            className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center overflow-hidden"
-            style={{
-              background: "oklch(0.14 0.04 265)",
-              border: "1px solid oklch(0.22 0.04 265)",
-            }}
-          >
-            {state.logoUrl ? (
-              <img
-                src={state.logoUrl}
-                alt={`${team.name} logo`}
-                className="w-full h-full object-cover rounded-full"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = "none";
-                }}
-              />
-            ) : (
-              <span
-                className="font-digital text-xs"
-                style={{ color: "oklch(0.78 0.165 85)" }}
-              >
-                {String(Number(team.id)).padStart(2, "0")}
-              </span>
-            )}
-          </div>
-          <div>
-            <div
-              className="font-broadcast text-sm tracking-wide"
-              style={{ color: "oklch(0.92 0.02 90)" }}
-            >
-              {team.name}
-            </div>
-            <div
-              className="text-xs mt-0.5"
-              style={{ color: "oklch(0.45 0.02 90)" }}
-            >
-              {Number(team.players_bought)}/7 bought · {remainingSlots} slots
-              left
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {team.is_locked && (
-            <div
-              className="flex items-center gap-1 text-xs px-2 py-0.5"
-              style={{
-                background: "oklch(0.62 0.22 25 / 0.1)",
-                border: "1px solid oklch(0.62 0.22 25 / 0.3)",
-                color: "oklch(0.75 0.15 25)",
-              }}
-            >
-              <Lock size={10} />
-              LOCKED
-            </div>
-          )}
-          {state.isDirty && (
-            <span
-              className="text-xs font-broadcast tracking-wider"
-              style={{ color: "oklch(0.78 0.165 85 / 0.7)" }}
-            >
-              UNSAVED
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Fields */}
-      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <div>
-          <label
-            htmlFor={`team-name-${String(team.id)}`}
-            className="block text-xs font-broadcast tracking-widest mb-1.5"
-            style={{ color: "oklch(0.45 0.02 90)" }}
-          >
-            TEAM NAME
-          </label>
-          <input
-            id={`team-name-${String(team.id)}`}
-            type="text"
-            value={state.name}
-            onChange={(e) => update("name", e.target.value)}
-            className={`w-full px-3 py-2 text-sm ${fieldFocusClass}`}
-            style={fieldStyle}
-          />
-        </div>
-        <div>
-          <label
-            htmlFor={`team-owner-${String(team.id)}`}
-            className="block text-xs font-broadcast tracking-widest mb-1.5"
-            style={{ color: "oklch(0.45 0.02 90)" }}
-          >
-            OWNER NAME
-          </label>
-          <input
-            id={`team-owner-${String(team.id)}`}
-            type="text"
-            value={state.ownerName}
-            onChange={(e) => update("ownerName", e.target.value)}
-            className={`w-full px-3 py-2 text-sm ${fieldFocusClass}`}
-            style={fieldStyle}
-          />
-        </div>
-        <div>
-          <label
-            htmlFor={`team-icon-${String(team.id)}`}
-            className="block text-xs font-broadcast tracking-widest mb-1.5"
-            style={{ color: "oklch(0.45 0.02 90)" }}
-          >
-            ICON PLAYER
-          </label>
-          <input
-            id={`team-icon-${String(team.id)}`}
-            type="text"
-            value={state.iconPlayerName}
-            onChange={(e) => update("iconPlayerName", e.target.value)}
-            className={`w-full px-3 py-2 text-sm ${fieldFocusClass}`}
-            style={fieldStyle}
-          />
-        </div>
-        <div>
-          <label
-            htmlFor={`team-purse-${String(team.id)}`}
-            className="block text-xs font-broadcast tracking-widest mb-1.5"
-            style={{ color: "oklch(0.45 0.02 90)" }}
-          >
-            PURSE REMAINING
-          </label>
-          <input
-            id={`team-purse-${String(team.id)}`}
-            type="number"
-            value={state.purse}
-            onChange={(e) => update("purse", e.target.value)}
-            className={`w-full px-3 py-2 font-digital text-sm ${fieldFocusClass}`}
-            style={fieldStyle}
-            min={0}
-          />
-        </div>
-      </div>
-
-      {/* Team Logo Upload */}
-      <div className="px-4 pb-4">
-        <p
-          className="block text-xs font-broadcast tracking-widest mb-2"
-          style={{ color: "oklch(0.45 0.02 90)" }}
+    <div className="space-y-6 max-w-2xl">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h2
+          className="font-broadcast text-lg tracking-widest"
+          style={{ color: "oklch(0.78 0.165 85)" }}
         >
-          TEAM LOGO (circle crop)
-        </p>
-        <div className="flex items-center gap-3">
-          {/* Circle preview */}
-          <div
-            className="w-10 h-10 rounded-full flex-shrink-0 overflow-hidden"
-            style={{
-              background: "oklch(0.14 0.04 265)",
-              border: "1px solid oklch(0.22 0.04 265)",
-            }}
-          >
-            {state.logoUrl ? (
-              <img
-                src={state.logoUrl}
-                alt="Logo preview"
-                className="w-full h-full object-cover rounded-full"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = "none";
-                }}
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center">
-                <ImageIcon size={14} style={{ color: "oklch(0.35 0.02 90)" }} />
-              </div>
-            )}
-          </div>
-
-          {/* Hidden file input */}
-          <input
-            ref={logoFileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handleLogoFileChange}
-          />
-
-          {/* Upload button */}
+          LIVE SCREEN LAYOUT
+        </h2>
+        <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => logoFileInputRef.current?.click()}
-            disabled={isLogoUploading}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-broadcast tracking-wider transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+            onClick={() => setShowPreview((v) => !v)}
+            className="px-4 py-1.5 font-broadcast tracking-widest text-xs transition-all hover:opacity-80"
             style={{
-              background: "oklch(0.12 0.03 265)",
-              border: "1px solid oklch(0.78 0.165 85 / 0.35)",
+              background: showPreview
+                ? "oklch(0.78 0.165 85 / 0.2)"
+                : "oklch(0.11 0.03 255)",
+              border: "1px solid oklch(0.78 0.165 85 / 0.4)",
               color: "oklch(0.78 0.165 85)",
             }}
           >
-            {isLogoUploading ? (
-              <>
-                <Loader2 size={11} className="animate-spin" />
-                {logoProgress}%
-              </>
-            ) : (
-              <>
-                <Upload size={11} />
-                UPLOAD LOGO
-              </>
-            )}
+            {showPreview ? "HIDE PREVIEW" : "SHOW PREVIEW"}
           </button>
-
-          {state.logoUrl && (
-            <button
-              type="button"
-              onClick={() =>
-                setState((prev) => ({ ...prev, logoUrl: "", isDirty: true }))
-              }
-              className="text-xs px-2 py-2 transition-opacity hover:opacity-80"
-              style={{
-                background: "oklch(0.12 0.03 265)",
-                border: "1px solid oklch(0.62 0.22 25 / 0.35)",
-                color: "oklch(0.62 0.22 25)",
-              }}
-            >
-              <Trash2 size={11} />
-            </button>
-          )}
-
-          {isLogoUploading && (
-            <div
-              className="flex-1 h-0.5 overflow-hidden"
-              style={{ background: "oklch(0.22 0.04 265)" }}
-            >
-              <div
-                className="h-full transition-all duration-200"
-                style={{
-                  width: `${logoProgress}%`,
-                  background:
-                    "linear-gradient(90deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
-                }}
-              />
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={reset}
+            className="px-3 py-1.5 font-broadcast tracking-widest text-xs transition-all hover:opacity-70"
+            style={{
+              background: "oklch(0.11 0.03 255)",
+              border: "1px solid oklch(0.22 0.04 255)",
+              color: "oklch(0.5 0.02 90)",
+            }}
+          >
+            RESET
+          </button>
         </div>
       </div>
 
-      {/* Footer action */}
-      <div
-        className="px-4 py-3 flex justify-end"
-        style={{ borderTop: "1px solid oklch(0.16 0.035 265)" }}
-      >
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={state.isSaving || !state.isDirty}
-          className="flex items-center gap-2 px-4 py-2 text-xs font-broadcast tracking-wider transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-          style={{
-            background: state.isDirty
-              ? "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))"
-              : "oklch(0.14 0.04 265)",
-            color: state.isDirty
-              ? "oklch(0.08 0.025 265)"
-              : "oklch(0.45 0.02 90)",
-            border: state.isDirty ? "none" : "1px solid oklch(0.22 0.04 265)",
-          }}
-        >
-          {state.isSaving ? (
-            <Loader2 size={12} className="animate-spin" />
-          ) : (
-            <Save size={12} />
-          )}
-          {state.isSaving ? "SAVING…" : "SAVE TEAM"}
-        </button>
-      </div>
-    </motion.div>
-  );
-}
-
-// ─── Player Row ───────────────────────────────────────────────────────────────
-
-function PlayerRow({
-  player,
-  onSave,
-  onDelete,
-}: {
-  player: Player;
-  onSave: (
-    id: bigint,
-    data: {
-      name: string;
-      category: string;
-      basePrice: bigint;
-      imageUrl: string;
-      rating: bigint;
-    },
-  ) => Promise<void>;
-  onDelete: (id: bigint, status: string) => Promise<void>;
-}) {
-  const [state, setState] = useState<PlayerEditState>({
-    name: player.name,
-    category: player.category,
-    basePrice: String(Number(player.base_price)),
-    imageUrl: player.image_url,
-    rating: String(Number(player.rating)),
-    isDirty: false,
-    isSaving: false,
-    isExpanded: false,
-  });
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const { uploadImage, isUploading, progress } = useImageUpload();
-
-  const update = (
-    key: keyof Omit<PlayerEditState, "isDirty" | "isSaving" | "isExpanded">,
-    val: string,
-  ) => {
-    setState((prev) => ({ ...prev, [key]: val, isDirty: true }));
-  };
-
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = "";
-    try {
-      const url = await uploadImage(file);
-      setState((prev) => ({ ...prev, imageUrl: url, isDirty: true }));
-      toast.success("Photo uploaded successfully");
-    } catch {
-      toast.error("Upload failed. Please try again or paste a URL.");
-    }
-  };
-
-  const handleSave = async () => {
-    const basePrice = Number.parseInt(state.basePrice, 10);
-    const rating = Number.parseInt(state.rating, 10);
-    if (Number.isNaN(basePrice) || Number.isNaN(rating)) {
-      toast.error("Invalid base price or rating");
-      return;
-    }
-    setState((prev) => ({ ...prev, isSaving: true }));
-    await onSave(player.id, {
-      name: state.name.trim(),
-      category: state.category,
-      basePrice: BigInt(basePrice),
-      imageUrl: state.imageUrl.trim(),
-      rating: BigInt(Math.min(5, Math.max(1, rating))),
-    });
-    setState((prev) => ({ ...prev, isSaving: false, isDirty: false }));
-  };
-
-  const handleDelete = async () => {
-    await onDelete(player.id, player.status);
-  };
-
-  const isSold = player.status === "sold";
-  const isLive = player.status === "live";
-
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15 } }}
-      style={{
-        background: "oklch(0.11 0.03 265)",
-        border: state.isDirty
-          ? "1px solid oklch(0.78 0.165 85 / 0.4)"
-          : "1px solid oklch(0.22 0.04 265)",
-        transition: "border-color 0.2s ease",
-      }}
-    >
-      {/* Collapsed row */}
-      <button
-        type="button"
-        className="w-full flex items-center gap-3 px-4 py-3 cursor-pointer select-none text-left"
-        onClick={() =>
-          setState((prev) => ({ ...prev, isExpanded: !prev.isExpanded }))
-        }
-      >
-        {/* Photo thumbnail */}
-        <div
-          className="w-9 h-9 flex-shrink-0 overflow-hidden"
-          style={{
-            border: "1px solid oklch(0.22 0.04 265)",
-          }}
-        >
-          {state.imageUrl ? (
-            <img
-              src={state.imageUrl}
-              alt={state.name}
-              className="w-full h-full object-cover"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = "none";
-              }}
-            />
-          ) : (
-            <div
-              className="w-full h-full flex items-center justify-center"
-              style={{ background: "oklch(0.14 0.04 265)" }}
-            >
-              <ImageIcon size={14} style={{ color: "oklch(0.35 0.02 90)" }} />
-            </div>
-          )}
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span
-              className="font-broadcast text-sm tracking-wide truncate"
-              style={{
-                color: isSold ? "oklch(0.45 0.02 90)" : "oklch(0.92 0.02 90)",
-                textDecoration: isSold ? "line-through" : "none",
-              }}
-            >
-              {player.name}
-            </span>
-            <CategoryBadge category={player.category} />
-            {isLive && (
-              <span
-                className="text-xs font-broadcast px-1.5 py-0.5 tracking-wider"
-                style={{
-                  background: "oklch(0.65 0.18 25 / 0.2)",
-                  border: "1px solid oklch(0.65 0.18 25 / 0.4)",
-                  color: "oklch(0.75 0.15 25)",
-                }}
-              >
-                LIVE
-              </span>
-            )}
-            {isSold && (
-              <span
-                className="text-xs font-broadcast px-1.5 py-0.5 tracking-wider"
-                style={{
-                  background: "oklch(0.7 0.15 140 / 0.15)",
-                  border: "1px solid oklch(0.7 0.15 140 / 0.3)",
-                  color: "oklch(0.7 0.15 140)",
-                }}
-              >
-                SOLD
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-3 mt-1">
-            <span
-              className="font-digital text-xs"
-              style={{ color: "oklch(0.55 0.02 90)" }}
-            >
-              {Number(player.base_price).toLocaleString()} pts
-            </span>
-            <StarRating value={Number(player.rating)} />
-            {state.isDirty && (
-              <span
-                className="text-xs font-broadcast tracking-wider"
-                style={{ color: "oklch(0.78 0.165 85 / 0.7)" }}
-              >
-                UNSAVED
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {state.isExpanded ? (
-            <ChevronUp size={14} style={{ color: "oklch(0.45 0.02 90)" }} />
-          ) : (
-            <ChevronDown size={14} style={{ color: "oklch(0.45 0.02 90)" }} />
-          )}
-        </div>
-      </button>
-
-      {/* Expanded editor */}
+      {/* Preview */}
       <AnimatePresence>
-        {state.isExpanded && (
+        {showPreview && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            style={{
-              overflow: "hidden",
-              borderTop: "1px solid oklch(0.16 0.035 265)",
-            }}
+            className="overflow-hidden"
           >
-            <div className="p-4 space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label
-                    htmlFor={`p-name-${String(player.id)}`}
-                    className="block text-xs font-broadcast tracking-widest mb-1.5"
-                    style={{ color: "oklch(0.45 0.02 90)" }}
-                  >
-                    PLAYER NAME
-                  </label>
-                  <input
-                    id={`p-name-${String(player.id)}`}
-                    type="text"
-                    value={state.name}
-                    onChange={(e) => update("name", e.target.value)}
-                    className={`w-full px-3 py-2 text-sm ${fieldFocusClass}`}
-                    style={fieldStyle}
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor={`p-cat-${String(player.id)}`}
-                    className="block text-xs font-broadcast tracking-widest mb-1.5"
-                    style={{ color: "oklch(0.45 0.02 90)" }}
-                  >
-                    CATEGORY
-                  </label>
-                  <select
-                    id={`p-cat-${String(player.id)}`}
-                    value={state.category}
-                    onChange={(e) => update("category", e.target.value)}
-                    className={`w-full px-3 py-2 text-sm ${fieldFocusClass}`}
-                    style={fieldStyle}
-                  >
-                    <option value="Batsman">Batsman</option>
-                    <option value="Bowler">Bowler</option>
-                    <option value="Allrounder">Allrounder</option>
-                  </select>
-                </div>
-                <div>
-                  <label
-                    htmlFor={`p-bp-${String(player.id)}`}
-                    className="block text-xs font-broadcast tracking-widest mb-1.5"
-                    style={{ color: "oklch(0.45 0.02 90)" }}
-                  >
-                    BASE PRICE (pts)
-                  </label>
-                  <input
-                    id={`p-bp-${String(player.id)}`}
-                    type="number"
-                    value={state.basePrice}
-                    onChange={(e) => update("basePrice", e.target.value)}
-                    className={`w-full px-3 py-2 font-digital text-sm ${fieldFocusClass}`}
-                    style={fieldStyle}
-                    min={100}
-                    step={100}
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor={`p-rating-${String(player.id)}`}
-                    className="block text-xs font-broadcast tracking-widest mb-1.5"
-                    style={{ color: "oklch(0.45 0.02 90)" }}
-                  >
-                    RATING (1–5)
-                  </label>
-                  <input
-                    id={`p-rating-${String(player.id)}`}
-                    type="number"
-                    value={state.rating}
-                    onChange={(e) => update("rating", e.target.value)}
-                    className={`w-full px-3 py-2 font-digital text-sm ${fieldFocusClass}`}
-                    style={fieldStyle}
-                    min={1}
-                    max={5}
-                  />
-                </div>
+            <div
+              className="p-3"
+              style={{
+                background: "oklch(0.07 0.025 255)",
+                border: "1px solid oklch(0.22 0.04 255)",
+              }}
+            >
+              <div
+                className="font-broadcast text-xs tracking-widest mb-2"
+                style={{ color: "oklch(0.45 0.02 90)" }}
+              >
+                PREVIEW (scaled 35%)
               </div>
-              {/* Image URL full width with preview + upload */}
-              <div>
-                <label
-                  htmlFor={`p-img-${String(player.id)}`}
-                  className="block text-xs font-broadcast tracking-widest mb-1.5"
-                  style={{ color: "oklch(0.45 0.02 90)" }}
+              <div
+                style={{
+                  transform: "scale(0.35)",
+                  transformOrigin: "top left",
+                  width: "285%",
+                  height: 260,
+                  pointerEvents: "none",
+                  overflow: "hidden",
+                }}
+              >
+                {/* Mini preview of live screen layout */}
+                <div
+                  className="flex"
+                  style={{
+                    height: "100%",
+                    background: "oklch(0.09 0.025 255)",
+                    border: "1px solid oklch(0.22 0.04 255)",
+                  }}
                 >
-                  PHOTO URL
-                </label>
-                <div className="flex gap-2 items-center">
-                  {state.imageUrl && (
+                  {/* Left: player area */}
+                  <div className="flex-1 flex flex-col items-center justify-center gap-3">
                     <div
-                      className="w-10 h-10 flex-shrink-0 overflow-hidden"
-                      style={{ border: "1px solid oklch(0.22 0.04 265)" }}
+                      style={{
+                        width: layout.playerImageWidth,
+                        height: layout.playerImageHeight,
+                        background: "oklch(0.14 0.04 255)",
+                        border: "2px solid oklch(0.78 0.165 85 / 0.4)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 12,
+                        color: "oklch(0.3 0.02 90)",
+                      }}
+                      className="font-broadcast"
                     >
-                      <img
-                        src={state.imageUrl}
-                        alt="preview"
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = "none";
+                      PHOTO
+                    </div>
+                    <div
+                      className="font-broadcast"
+                      style={{
+                        fontSize: 36 * (layout.playerNameSize / 100),
+                        color: "oklch(0.88 0.02 90)",
+                      }}
+                    >
+                      PLAYER NAME
+                    </div>
+                    <div
+                      className="font-digital"
+                      style={{
+                        fontSize: 80 * (layout.bidCounterSize / 100),
+                        color: "oklch(0.78 0.165 85)",
+                      }}
+                    >
+                      5,200
+                    </div>
+                    <div
+                      style={{
+                        fontSize: Math.round(
+                          13 * (layout.leadingTeamSize / 100),
+                        ),
+                        color: "oklch(0.88 0.14 82)",
+                      }}
+                      className="font-broadcast"
+                    >
+                      LEADING TEAM
+                    </div>
+                  </div>
+                  {/* Right panel */}
+                  <div
+                    style={{
+                      width: layout.rightPanelWidth,
+                      background: "oklch(0.08 0.025 255)",
+                      borderLeft: "1px solid oklch(0.22 0.04 255)",
+                      padding: 8,
+                    }}
+                  >
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <div
+                        key={`preview-team-row-${i + 1}`}
+                        style={{
+                          height: Math.round(
+                            14 * (layout.teamTableFontSize / 100),
+                          ),
+                          background: "oklch(0.14 0.04 255)",
+                          marginBottom: 3,
                         }}
                       />
-                    </div>
-                  )}
-                  <input
-                    id={`p-img-${String(player.id)}`}
-                    type="url"
-                    value={state.imageUrl}
-                    onChange={(e) => update("imageUrl", e.target.value)}
-                    placeholder="https://example.com/player.jpg"
-                    className={`flex-1 px-3 py-2 text-sm ${fieldFocusClass}`}
-                    style={{ ...fieldStyle, fontFamily: "inherit" }}
-                  />
-                  {/* Hidden file input */}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handleFileChange}
-                  />
-                  {/* Upload button */}
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isUploading}
-                    title="Upload photo from device"
-                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-broadcast tracking-wider transition-all flex-shrink-0 disabled:opacity-60 disabled:cursor-not-allowed"
-                    style={{
-                      background: "oklch(0.12 0.03 265)",
-                      border: "1px solid oklch(0.78 0.165 85 / 0.35)",
-                      color: "oklch(0.78 0.165 85)",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!isUploading) {
-                        (
-                          e.currentTarget as HTMLButtonElement
-                        ).style.background = "oklch(0.78 0.165 85 / 0.12)";
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.background =
-                        "oklch(0.12 0.03 265)";
-                    }}
-                  >
-                    {isUploading ? (
-                      <>
-                        <Loader2 size={11} className="animate-spin" />
-                        <span>{progress}%</span>
-                      </>
-                    ) : (
-                      <>
-                        <Upload size={11} />
-                        UPLOAD
-                      </>
-                    )}
-                  </button>
-                </div>
-                {isUploading && (
-                  <div
-                    className="mt-1.5 h-0.5 overflow-hidden"
-                    style={{ background: "oklch(0.22 0.04 265)" }}
-                  >
+                    ))}
                     <div
-                      className="h-full transition-all duration-200"
                       style={{
-                        width: `${progress}%`,
-                        background:
-                          "linear-gradient(90deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
+                        height: layout.chartHeight,
+                        background: "oklch(0.12 0.03 255)",
+                        marginTop: 8,
                       }}
                     />
                   </div>
-                )}
-              </div>
-
-              {/* Actions */}
-              <div
-                className="flex items-center justify-between pt-2"
-                style={{ borderTop: "1px solid oklch(0.16 0.035 265)" }}
-              >
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete();
-                  }}
-                  className="flex items-center gap-2 px-3 py-2 text-xs font-broadcast tracking-wider transition-all hover:opacity-80"
-                  style={{
-                    background: "oklch(0.12 0.03 265)",
-                    border: "1px solid oklch(0.62 0.22 25 / 0.35)",
-                    color: "oklch(0.62 0.22 25)",
-                  }}
-                >
-                  <Trash2 size={11} />
-                  DELETE
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleSave();
-                  }}
-                  disabled={state.isSaving || !state.isDirty}
-                  className="flex items-center gap-2 px-4 py-2 text-xs font-broadcast tracking-wider transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-                  style={{
-                    background: state.isDirty
-                      ? "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))"
-                      : "oklch(0.14 0.04 265)",
-                    color: state.isDirty
-                      ? "oklch(0.08 0.025 265)"
-                      : "oklch(0.45 0.02 90)",
-                    border: state.isDirty
-                      ? "none"
-                      : "1px solid oklch(0.22 0.04 265)",
-                  }}
-                >
-                  {state.isSaving ? (
-                    <Loader2 size={11} className="animate-spin" />
-                  ) : (
-                    <Save size={11} />
-                  )}
-                  {state.isSaving ? "SAVING…" : "SAVE PLAYER"}
-                </button>
+                </div>
               </div>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-    </motion.div>
-  );
-}
 
-// ─── Add Player Modal ─────────────────────────────────────────────────────────
-
-function AddPlayerModal({
-  onClose,
-  onAdd,
-}: {
-  onClose: () => void;
-  onAdd: (data: {
-    name: string;
-    category: string;
-    basePrice: bigint;
-    imageUrl: string;
-    rating: bigint;
-  }) => Promise<void>;
-}) {
-  const [form, setForm] = useState({
-    name: "",
-    category: "Batsman",
-    basePrice: "500",
-    imageUrl: "",
-    rating: "3",
-  });
-  const [isAdding, setIsAdding] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const nameRef = useRef<HTMLInputElement>(null);
-  const modalFileInputRef = useRef<HTMLInputElement>(null);
-  const {
-    uploadImage,
-    isUploading: isModalUploading,
-    progress: modalProgress,
-  } = useImageUpload();
-
-  const handleModalFileChange = async (
-    e: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = "";
-    try {
-      const url = await uploadImage(file);
-      setForm((prev) => ({ ...prev, imageUrl: url }));
-      toast.success("Photo uploaded successfully");
-    } catch {
-      toast.error("Upload failed. Please try again or paste a URL.");
-    }
-  };
-
-  useEffect(() => {
-    nameRef.current?.focus();
-  }, []);
-
-  const validate = () => {
-    const e: Record<string, string> = {};
-    if (!form.name.trim()) e.name = "Name is required";
-    const bp = Number.parseInt(form.basePrice, 10);
-    if (Number.isNaN(bp) || bp < 100) e.basePrice = "Minimum base price is 100";
-    const r = Number.parseInt(form.rating, 10);
-    if (Number.isNaN(r) || r < 1 || r > 5) e.rating = "Rating must be 1–5";
-    return e;
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const errs = validate();
-    if (Object.keys(errs).length > 0) {
-      setErrors(errs);
-      return;
-    }
-    setIsAdding(true);
-    await onAdd({
-      name: form.name.trim(),
-      category: form.category,
-      basePrice: BigInt(Number.parseInt(form.basePrice, 10)),
-      imageUrl: form.imageUrl.trim(),
-      rating: BigInt(Number.parseInt(form.rating, 10)),
-    });
-    setIsAdding(false);
-  };
-
-  const upd = (k: string, v: string) => {
-    setForm((prev) => ({ ...prev, [k]: v }));
-    setErrors((prev) => {
-      const next = { ...prev };
-      delete next[k];
-      return next;
-    });
-  };
-
-  return (
-    <button
-      type="button"
-      className="fixed inset-0 z-50 flex items-center justify-center px-4 w-full"
-      style={{ background: "oklch(0 0 0 / 0.75)" }}
-      onClick={onClose}
-      aria-label="Close modal"
-    >
-      <motion.div
-        initial={{ opacity: 0, scale: 0.92, y: 16 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 8 }}
-        transition={{ duration: 0.2 }}
-        className="w-full max-w-lg"
-        style={{
-          background: "oklch(0.11 0.03 265)",
-          border: "1px solid oklch(0.78 0.165 85 / 0.3)",
-          boxShadow: "0 0 60px oklch(0.78 0.165 85 / 0.1)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Modal header */}
-        <div
-          className="flex items-center justify-between px-5 py-4"
-          style={{ borderBottom: "1px solid oklch(0.16 0.035 265)" }}
-        >
-          <div className="flex items-center gap-2">
-            <Plus size={14} style={{ color: "oklch(0.78 0.165 85)" }} />
-            <span
-              className="font-broadcast text-sm tracking-wider"
-              style={{ color: "oklch(0.78 0.165 85)" }}
-            >
-              ADD NEW PLAYER
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-xs transition-opacity hover:opacity-70"
-            style={{ color: "oklch(0.45 0.02 90)" }}
-          >
-            ✕
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2">
-              <label
-                htmlFor="add-player-name"
-                className="block text-xs font-broadcast tracking-widest mb-1.5"
-                style={{ color: "oklch(0.45 0.02 90)" }}
+      {/* Sliders */}
+      <div className="space-y-4">
+        {LAYOUT_SLIDERS.map(({ key, label, min, max, unit }) => (
+          <div key={key} className="space-y-1">
+            <div className="flex justify-between items-center">
+              <span
+                className="font-broadcast tracking-wide text-sm"
+                style={{ color: "oklch(0.65 0.02 90)" }}
               >
-                PLAYER NAME *
-              </label>
+                {label}
+              </span>
+              <span
+                className="font-digital text-sm"
+                style={{ color: "oklch(0.78 0.165 85)" }}
+              >
+                {layout[key]}
+                {unit}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() =>
+                  setLayout((l) => ({
+                    ...l,
+                    [key]: Math.max(min, l[key] - 10),
+                  }))
+                }
+                className="w-7 h-7 flex items-center justify-center transition-opacity hover:opacity-80"
+                style={{
+                  background: "oklch(0.13 0.03 255)",
+                  border: "1px solid oklch(0.22 0.04 255)",
+                  color: "oklch(0.55 0.02 90)",
+                }}
+              >
+                <Minus size={12} />
+              </button>
               <input
-                id="add-player-name"
-                ref={nameRef}
-                type="text"
-                value={form.name}
-                onChange={(e) => upd("name", e.target.value)}
-                placeholder="e.g. Virat Kohli"
-                className={`w-full px-3 py-2 text-sm ${fieldFocusClass}`}
-                style={fieldStyle}
+                type="range"
+                min={min}
+                max={max}
+                value={layout[key]}
+                onChange={(e) =>
+                  setLayout((l) => ({ ...l, [key]: +e.target.value }))
+                }
+                className="flex-1 accent-amber-400"
               />
-              {errors.name && (
-                <p
-                  className="text-xs mt-1 flex items-center gap-1"
-                  style={{ color: "oklch(0.75 0.15 25)" }}
-                >
-                  <AlertCircle size={10} />
-                  {errors.name}
-                </p>
-              )}
-            </div>
-            <div>
-              <label
-                htmlFor="add-player-category"
-                className="block text-xs font-broadcast tracking-widest mb-1.5"
-                style={{ color: "oklch(0.45 0.02 90)" }}
+              <button
+                type="button"
+                onClick={() =>
+                  setLayout((l) => ({
+                    ...l,
+                    [key]: Math.min(max, l[key] + 10),
+                  }))
+                }
+                className="w-7 h-7 flex items-center justify-center transition-opacity hover:opacity-80"
+                style={{
+                  background: "oklch(0.13 0.03 255)",
+                  border: "1px solid oklch(0.22 0.04 255)",
+                  color: "oklch(0.55 0.02 90)",
+                }}
               >
-                CATEGORY
-              </label>
-              <select
-                id="add-player-category"
-                value={form.category}
-                onChange={(e) => upd("category", e.target.value)}
-                className={`w-full px-3 py-2 text-sm ${fieldFocusClass}`}
-                style={fieldStyle}
-              >
-                <option value="Batsman">Batsman</option>
-                <option value="Bowler">Bowler</option>
-                <option value="Allrounder">Allrounder</option>
-              </select>
-            </div>
-            <div>
-              <label
-                htmlFor="add-player-base-price"
-                className="block text-xs font-broadcast tracking-widest mb-1.5"
-                style={{ color: "oklch(0.45 0.02 90)" }}
-              >
-                BASE PRICE *
-              </label>
-              <input
-                id="add-player-base-price"
-                type="number"
-                value={form.basePrice}
-                onChange={(e) => upd("basePrice", e.target.value)}
-                className={`w-full px-3 py-2 font-digital text-sm ${fieldFocusClass}`}
-                style={fieldStyle}
-                min={100}
-                step={100}
-              />
-              {errors.basePrice && (
-                <p
-                  className="text-xs mt-1 flex items-center gap-1"
-                  style={{ color: "oklch(0.75 0.15 25)" }}
-                >
-                  <AlertCircle size={10} />
-                  {errors.basePrice}
-                </p>
-              )}
-            </div>
-            <div>
-              <label
-                htmlFor="add-player-rating"
-                className="block text-xs font-broadcast tracking-widest mb-1.5"
-                style={{ color: "oklch(0.45 0.02 90)" }}
-              >
-                RATING (1–5) *
-              </label>
-              <input
-                id="add-player-rating"
-                type="number"
-                value={form.rating}
-                onChange={(e) => upd("rating", e.target.value)}
-                className={`w-full px-3 py-2 font-digital text-sm ${fieldFocusClass}`}
-                style={fieldStyle}
-                min={1}
-                max={5}
-              />
-              {errors.rating && (
-                <p
-                  className="text-xs mt-1 flex items-center gap-1"
-                  style={{ color: "oklch(0.75 0.15 25)" }}
-                >
-                  <AlertCircle size={10} />
-                  {errors.rating}
-                </p>
-              )}
-            </div>
-            <div className="col-span-2">
-              <label
-                htmlFor="add-player-image-url"
-                className="block text-xs font-broadcast tracking-widest mb-1.5"
-                style={{ color: "oklch(0.45 0.02 90)" }}
-              >
-                PHOTO URL
-              </label>
-              <div className="flex gap-2 items-center">
-                {form.imageUrl && (
-                  <div
-                    className="w-10 h-10 flex-shrink-0 overflow-hidden"
-                    style={{ border: "1px solid oklch(0.22 0.04 265)" }}
-                  >
-                    <img
-                      src={form.imageUrl}
-                      alt="preview"
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = "none";
-                      }}
-                    />
-                  </div>
-                )}
-                <input
-                  id="add-player-image-url"
-                  type="url"
-                  value={form.imageUrl}
-                  onChange={(e) => upd("imageUrl", e.target.value)}
-                  placeholder="https://example.com/player.jpg"
-                  className={`flex-1 px-3 py-2 text-sm ${fieldFocusClass}`}
-                  style={{ ...fieldStyle, fontFamily: "inherit" }}
-                />
-                {/* Hidden file input */}
-                <input
-                  ref={modalFileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleModalFileChange}
-                />
-                {/* Upload button */}
-                <button
-                  type="button"
-                  onClick={() => modalFileInputRef.current?.click()}
-                  disabled={isModalUploading}
-                  title="Upload photo from device"
-                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-broadcast tracking-wider transition-all flex-shrink-0 disabled:opacity-60 disabled:cursor-not-allowed"
-                  style={{
-                    background: "oklch(0.12 0.03 265)",
-                    border: "1px solid oklch(0.78 0.165 85 / 0.35)",
-                    color: "oklch(0.78 0.165 85)",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isModalUploading) {
-                      (e.currentTarget as HTMLButtonElement).style.background =
-                        "oklch(0.78 0.165 85 / 0.12)";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background =
-                      "oklch(0.12 0.03 265)";
-                  }}
-                >
-                  {isModalUploading ? (
-                    <>
-                      <Loader2 size={11} className="animate-spin" />
-                      <span>{modalProgress}%</span>
-                    </>
-                  ) : (
-                    <>
-                      <Upload size={11} />
-                      UPLOAD
-                    </>
-                  )}
-                </button>
-              </div>
-              {isModalUploading && (
-                <div
-                  className="mt-1.5 h-0.5 overflow-hidden"
-                  style={{ background: "oklch(0.22 0.04 265)" }}
-                >
-                  <div
-                    className="h-full transition-all duration-200"
-                    style={{
-                      width: `${modalProgress}%`,
-                      background:
-                        "linear-gradient(90deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
-                    }}
-                  />
-                </div>
-              )}
+                <Plus size={12} />
+              </button>
             </div>
           </div>
-
-          <div className="flex gap-3 pt-1">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 py-2.5 text-sm font-broadcast tracking-wider transition-opacity hover:opacity-80"
-              style={{
-                background: "oklch(0.14 0.04 265)",
-                border: "1px solid oklch(0.22 0.04 265)",
-                color: "oklch(0.55 0.02 90)",
-              }}
-            >
-              CANCEL
-            </button>
-            <button
-              type="submit"
-              disabled={isAdding}
-              className="flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-broadcast tracking-wider transition-all hover:opacity-90 disabled:opacity-50"
-              style={{
-                background:
-                  "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
-                color: "oklch(0.08 0.025 265)",
-              }}
-            >
-              {isAdding ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Plus size={14} />
-              )}
-              {isAdding ? "ADDING…" : "ADD PLAYER"}
-            </button>
-          </div>
-        </form>
-      </motion.div>
-    </button>
-  );
-}
-
-// ─── Teams Tab ────────────────────────────────────────────────────────────────
-
-function TeamsTab({
-  teams,
-  onRefresh,
-}: {
-  teams: Team[];
-  onRefresh: () => Promise<void>;
-}) {
-  const { actor } = useActor();
-
-  const handleSaveTeam = async (
-    id: bigint,
-    data: {
-      name: string;
-      ownerName: string;
-      iconPlayerName: string;
-      newPurse: bigint | null;
-    },
-  ) => {
-    if (!actor) return;
-    try {
-      const [teamResult, purseResult] = await Promise.all([
-        actor.updateTeam(id, data.name, data.ownerName, data.iconPlayerName),
-        data.newPurse !== null
-          ? actor.editTeamPurse(id, data.newPurse)
-          : Promise.resolve({ __kind__: "ok" as const, ok: null }),
-      ]);
-
-      if (teamResult.__kind__ === "err") {
-        toast.error(`Team update failed: ${teamResult.err}`);
-        return;
-      }
-      if (purseResult.__kind__ === "err") {
-        toast.error(`Purse update failed: ${purseResult.err}`);
-        return;
-      }
-
-      toast.success("Team saved successfully");
-      await onRefresh();
-    } catch {
-      toast.error("Failed to save team");
-    }
-  };
-
-  return (
-    <div className="space-y-3">
-      <div
-        className="px-1 flex items-center gap-2 text-xs"
-        style={{ color: "oklch(0.45 0.02 90)" }}
-      >
-        <Users size={12} />
-        <span>
-          {teams.length} teams · Edit fields then SAVE TEAM · Logos stored
-          locally in browser
-        </span>
+        ))}
       </div>
-      {teams.map((team) => (
-        <TeamRow key={String(team.id)} team={team} onSave={handleSaveTeam} />
-      ))}
+
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={save}
+          className="flex items-center gap-2 px-6 py-2 font-broadcast tracking-widest text-sm transition-all hover:opacity-90 active:scale-95"
+          style={{
+            background: saved
+              ? "oklch(0.55 0.15 140)"
+              : "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
+            color: "oklch(0.08 0.02 265)",
+            boxShadow: "0 0 20px oklch(0.78 0.165 85 / 0.25)",
+          }}
+        >
+          <Save size={14} />
+          {saved ? "SAVED!" : "SAVE LAYOUT"}
+        </button>
+        {syncing && (
+          <span
+            className="flex items-center gap-1.5 text-xs font-broadcast tracking-wider"
+            style={{ color: "oklch(0.55 0.02 90)" }}
+          >
+            <Loader2 size={11} className="animate-spin" />
+            Syncing…
+          </span>
+        )}
+      </div>
+      <p
+        className="font-broadcast tracking-wide text-xs"
+        style={{ color: "oklch(0.4 0.02 90)" }}
+      >
+        Refresh /live after saving to see the updated layout.
+      </p>
     </div>
   );
 }
 
-// ─── Players Tab ──────────────────────────────────────────────────────────────
+// ─── Live Colours Tab ─────────────────────────────────────────────────────────
+interface ColorGroup {
+  label: string;
+  fields: { key: keyof LiveColorTheme; label: string }[];
+}
 
-function PlayersTab({
-  players,
-  onRefresh,
-}: {
-  players: Player[];
-  onRefresh: () => Promise<void>;
-}) {
+const COLOR_GROUPS: ColorGroup[] = [
+  {
+    label: "BACKGROUNDS",
+    fields: [
+      { key: "pageBg", label: "Page Background" },
+      { key: "headerBg", label: "Header Bar" },
+      { key: "rightPanelBg", label: "Right Panel" },
+      { key: "playerImageBg", label: "Player Image Placeholder" },
+      { key: "atmosphereBg", label: "Atmosphere Glow" },
+    ],
+  },
+  {
+    label: "ACCENTS & TEXT",
+    fields: [
+      { key: "goldAccent", label: "Primary Accent (Gold)" },
+      { key: "silverAccent", label: "Secondary Accent (Silver)" },
+      { key: "primaryText", label: "Primary Text" },
+      { key: "secondaryText", label: "Secondary Text / Captions" },
+      { key: "gridColor", label: "Decorative Grid" },
+      { key: "liveDotColor", label: "LIVE Indicator Dot" },
+    ],
+  },
+  {
+    label: "BID COUNTER",
+    fields: [
+      { key: "bidCounterColor", label: "Bid Number Colour" },
+      { key: "bidCounterGlow", label: "Bid Number Glow" },
+    ],
+  },
+  {
+    label: "LEADING TEAM BANNER",
+    fields: [
+      { key: "leadingTeamBg", label: "Banner Background" },
+      { key: "leadingTeamText", label: "Team Name Text" },
+    ],
+  },
+  {
+    label: "TEAM TABLE",
+    fields: [
+      { key: "teamRowBg", label: "Row Background" },
+      { key: "teamRowLeadingBg", label: "Leading Row Background" },
+      { key: "teamRowLeadingBorder", label: "Leading Row Border" },
+      { key: "teamRowText", label: "Row Text" },
+      { key: "teamRowLeadingText", label: "Leading Row Text" },
+    ],
+  },
+  {
+    label: "PURSE CHART",
+    fields: [
+      { key: "chartBarDefault", label: "Bar Colour (Default)" },
+      { key: "chartBarLeading", label: "Bar Colour (Leading Team)" },
+    ],
+  },
+  {
+    label: "CATEGORY BADGES",
+    fields: [
+      { key: "batsmanColor", label: "Batsman Badge" },
+      { key: "bowlerColor", label: "Bowler Badge" },
+      { key: "allrounderColor", label: "Allrounder Badge" },
+    ],
+  },
+  {
+    label: "SOLD OVERLAY",
+    fields: [
+      { key: "soldBannerBg", label: "Banner Background" },
+      { key: "soldBannerBorder", label: "Banner Border" },
+      { key: "soldTextColor", label: "SOLD! Text Colour" },
+    ],
+  },
+];
+
+function LiveColoursTab() {
   const { actor } = useActor();
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [filterCategory, setFilterCategory] = useState<string>("All");
+  const [colors, setColors] = useState<LiveColorTheme>(getLiveColors);
+  const [saved, setSaved] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
 
-  const sortedPlayers = [...players].sort(
-    (a, b) => Number(a.id) - Number(b.id),
-  );
-  const filtered =
-    filterCategory === "All"
-      ? sortedPlayers
-      : sortedPlayers.filter((p) => p.category === filterCategory);
+  const set = (key: keyof LiveColorTheme, val: string) => {
+    setColors((prev) => ({ ...prev, [key]: val }));
+  };
 
-  const handleSavePlayer = async (
-    id: bigint,
-    data: {
-      name: string;
-      category: string;
-      basePrice: bigint;
-      imageUrl: string;
-      rating: bigint;
-    },
-  ) => {
-    if (!actor) return;
-    try {
-      const result = await actor.updatePlayer(
-        id,
-        data.name,
-        data.category,
-        data.basePrice,
-        data.imageUrl,
-        data.rating,
-      );
-      if (result.__kind__ === "err") {
-        toast.error(`Update failed: ${result.err}`);
-        return;
-      }
-      toast.success("Player updated");
-      await onRefresh();
-    } catch {
-      toast.error("Failed to update player");
+  const save = async () => {
+    saveLiveColors(colors);
+    // Also save to IDB
+    await idbStore.setSetting("spl_live_colors", JSON.stringify(colors));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+    toast.success("Colours saved — refresh /live to apply");
+    // Background sync to backend
+    if (actor) {
+      setSyncing(true);
+      const [logosRaw, ownerRaw, iconRaw, leagueRaw] = await Promise.all([
+        idbStore.getSetting("spl_team_logos"),
+        idbStore.getSetting("spl_owner_photos"),
+        idbStore.getSetting("spl_icon_photos"),
+        idbStore.getSetting("spl_league_settings"),
+      ]);
+      const allSettings: AllSettings = {
+        league: leagueRaw
+          ? (JSON.parse(leagueRaw) as LeagueSettings)
+          : getLeagueSettings(),
+        teamLogos: logosRaw
+          ? (JSON.parse(logosRaw) as Record<string, string>)
+          : {},
+        ownerPhotos: ownerRaw
+          ? (JSON.parse(ownerRaw) as Record<string, string>)
+          : {},
+        iconPhotos: iconRaw
+          ? (JSON.parse(iconRaw) as Record<string, string>)
+          : {},
+        liveColors: colors,
+        liveLayout: getLiveLayout(),
+      };
+      saveSettingsToBackend(actor, allSettings).finally(() => {
+        setSyncing(false);
+      });
     }
   };
 
-  const handleDeletePlayer = async (id: bigint, status: string) => {
-    if (status !== "upcoming") {
-      const confirmed = confirm(
-        `⚠️ This player has status "${status}". Deleting them may affect auction state. Proceed?`,
-      );
-      if (!confirmed) return;
-    }
-    if (!actor) return;
-    try {
-      const result = await actor.deletePlayer(id);
-      if (result.__kind__ === "err") {
-        toast.error(`Delete failed: ${result.err}`);
-        return;
-      }
-      toast.success("Player deleted");
-      await onRefresh();
-    } catch {
-      toast.error("Failed to delete player");
-    }
-  };
-
-  const handleAddPlayer = async (data: {
-    name: string;
-    category: string;
-    basePrice: bigint;
-    imageUrl: string;
-    rating: bigint;
-  }) => {
-    if (!actor) return;
-    try {
-      const result = await actor.addPlayer(
-        data.name,
-        data.category,
-        data.basePrice,
-        data.imageUrl,
-        data.rating,
-      );
-      if (result.__kind__ === "err") {
-        toast.error(`Add failed: ${result.err}`);
-        return;
-      }
-      toast.success(`${data.name} added to player pool`);
-      setShowAddModal(false);
-      await onRefresh();
-    } catch {
-      toast.error("Failed to add player");
-    }
-  };
-
-  const counts = {
-    All: players.length,
-    Batsman: players.filter((p) => p.category === "Batsman").length,
-    Bowler: players.filter((p) => p.category === "Bowler").length,
-    Allrounder: players.filter((p) => p.category === "Allrounder").length,
+  const reset = () => {
+    setColors({ ...DEFAULT_LIVE_COLORS });
+    toast.info("Reset to defaults (not saved yet)");
   };
 
   return (
-    <>
-      <div className="space-y-4">
-        {/* Filter + stats bar */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {(["All", "Batsman", "Bowler", "Allrounder"] as const).map((cat) => (
-            <button
-              key={cat}
-              type="button"
-              onClick={() => setFilterCategory(cat)}
-              className="px-3 py-1.5 text-xs font-broadcast tracking-wider transition-all"
+    <div className="space-y-6 max-w-2xl">
+      {/* Header row */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h2
+          className="font-broadcast text-lg tracking-widest"
+          style={{ color: "oklch(0.78 0.165 85)" }}
+        >
+          LIVE SCREEN COLOURS
+        </h2>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setShowPreview((v) => !v)}
+            className="px-4 py-1.5 font-broadcast tracking-widest text-xs transition-all hover:opacity-80"
+            style={{
+              background: showPreview
+                ? "oklch(0.78 0.165 85 / 0.2)"
+                : "oklch(0.11 0.03 255)",
+              border: "1px solid oklch(0.78 0.165 85 / 0.4)",
+              color: "oklch(0.78 0.165 85)",
+            }}
+          >
+            {showPreview ? "HIDE PREVIEW" : "SHOW PREVIEW"}
+          </button>
+          <button
+            type="button"
+            onClick={reset}
+            className="px-3 py-1.5 font-broadcast tracking-widest text-xs transition-all hover:opacity-70"
+            style={{
+              background: "oklch(0.11 0.03 255)",
+              border: "1px solid oklch(0.22 0.04 255)",
+              color: "oklch(0.5 0.02 90)",
+            }}
+          >
+            RESET
+          </button>
+        </div>
+      </div>
+
+      {/* Mini preview */}
+      <AnimatePresence>
+        {showPreview && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden"
+          >
+            <div
+              className="p-3"
               style={{
-                background:
-                  filterCategory === cat
-                    ? cat === "All"
-                      ? "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))"
-                      : `${CATEGORY_COLORS[cat] ?? "oklch(0.78 0.165 85)"}22`
-                    : "oklch(0.14 0.04 265)",
-                border:
-                  filterCategory === cat
-                    ? cat === "All"
-                      ? "none"
-                      : `1px solid ${CATEGORY_COLORS[cat] ?? "oklch(0.78 0.165 85)"}66`
-                    : "1px solid oklch(0.22 0.04 265)",
-                color:
-                  filterCategory === cat
-                    ? cat === "All"
-                      ? "oklch(0.08 0.025 265)"
-                      : (CATEGORY_COLORS[cat] ?? "oklch(0.78 0.165 85)")
-                    : "oklch(0.55 0.02 90)",
+                background: "oklch(0.07 0.025 255)",
+                border: "1px solid oklch(0.22 0.04 255)",
               }}
             >
-              {cat} ({counts[cat as keyof typeof counts]})
-            </button>
-          ))}
-          <span
-            className="ml-auto text-xs"
-            style={{ color: "oklch(0.35 0.02 90)" }}
-          >
-            Click any player row to expand & edit
-          </span>
-        </div>
+              <div
+                className="font-broadcast text-xs tracking-widest mb-2"
+                style={{ color: "oklch(0.45 0.02 90)" }}
+              >
+                COLOUR PREVIEW (scaled 45%)
+              </div>
+              <div
+                style={{
+                  transform: "scale(0.45)",
+                  transformOrigin: "top left",
+                  width: "222%",
+                  height: 240,
+                  pointerEvents: "none",
+                  overflow: "hidden",
+                }}
+              >
+                {/* Simulated live screen */}
+                <div
+                  className="flex"
+                  style={{ height: "100%", background: colors.pageBg }}
+                >
+                  {/* Header */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: 40,
+                      background: colors.headerBg,
+                      borderBottom: `1px solid ${colors.goldAccent}44`,
+                      display: "flex",
+                      alignItems: "center",
+                      paddingLeft: 12,
+                      gap: 8,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        background: colors.liveDotColor,
+                      }}
+                    />
+                    <span
+                      style={{
+                        fontFamily: '"Bricolage Grotesque"',
+                        fontWeight: 900,
+                        fontSize: 12,
+                        color: colors.goldAccent,
+                      }}
+                    >
+                      SPL
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: '"Bricolage Grotesque"',
+                        fontSize: 10,
+                        color: colors.secondaryText,
+                      }}
+                    >
+                      LIVE
+                    </span>
+                  </div>
 
-        {/* Player list */}
-        <AnimatePresence mode="popLayout">
-          {filtered.map((player) => (
-            <PlayerRow
-              key={String(player.id)}
-              player={player}
-              onSave={handleSavePlayer}
-              onDelete={handleDeletePlayer}
-            />
-          ))}
-        </AnimatePresence>
+                  {/* Center: player + bid */}
+                  <div
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingTop: 40,
+                      gap: 10,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 80,
+                        height: 100,
+                        background: colors.playerImageBg,
+                        border: `2px solid ${colors.goldAccent}66`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: colors.secondaryText,
+                        fontSize: 10,
+                        fontFamily: '"Bricolage Grotesque"',
+                      }}
+                    >
+                      PHOTO
+                    </div>
+                    <span
+                      style={{
+                        fontFamily: '"Bricolage Grotesque"',
+                        fontWeight: 900,
+                        fontSize: 18,
+                        color: colors.primaryText,
+                      }}
+                    >
+                      PLAYER NAME
+                    </span>
+                    {/* Category badges */}
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {(
+                        [
+                          ["BATSMAN", colors.batsmanColor],
+                          ["BOWLER", colors.bowlerColor],
+                          ["ALLROUNDER", colors.allrounderColor],
+                        ] as [string, string][]
+                      ).map(([label, color]) => (
+                        <span
+                          key={label}
+                          style={{
+                            background: `${color}22`,
+                            border: `1px solid ${color}66`,
+                            color,
+                            padding: "2px 6px",
+                            fontSize: 9,
+                            fontFamily: '"Bricolage Grotesque"',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                    <span
+                      style={{
+                        fontFamily: '"Geist Mono", monospace',
+                        fontWeight: 700,
+                        fontSize: 40,
+                        color: colors.bidCounterColor,
+                        textShadow: `0 0 20px ${colors.bidCounterGlow}`,
+                      }}
+                    >
+                      5,200
+                    </span>
+                    <div
+                      style={{
+                        background: colors.leadingTeamBg,
+                        border: `1px solid ${colors.goldAccent}55`,
+                        padding: "4px 12px",
+                        color: colors.leadingTeamText,
+                        fontSize: 12,
+                        fontFamily: '"Bricolage Grotesque"',
+                        fontWeight: 700,
+                      }}
+                    >
+                      LEADING TEAM
+                    </div>
+                  </div>
 
-        {filtered.length === 0 && (
-          <div
-            className="py-12 text-center"
-            style={{ color: "oklch(0.35 0.02 90)" }}
-          >
-            <div className="text-4xl mb-3">🏏</div>
-            <div className="font-broadcast text-xs tracking-widest">
-              NO PLAYERS FOUND
+                  {/* Right panel */}
+                  <div
+                    style={{
+                      width: 160,
+                      background: colors.rightPanelBg,
+                      borderLeft: `1px solid ${colors.goldAccent}22`,
+                      padding: 8,
+                      paddingTop: 48,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                    }}
+                  >
+                    {(
+                      [
+                        "Team 1 (leading)",
+                        "Team 2",
+                        "Team 3",
+                        "Team 4",
+                        "Team 5",
+                      ] as const
+                    ).map((teamLabel, i) => {
+                      const leading = i === 0;
+                      return (
+                        <div
+                          key={teamLabel}
+                          style={{
+                            background: leading
+                              ? colors.teamRowLeadingBg
+                              : colors.teamRowBg,
+                            border: `1px solid ${leading ? colors.teamRowLeadingBorder : "transparent"}`,
+                            height: 20,
+                            display: "flex",
+                            alignItems: "center",
+                            paddingLeft: 6,
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: 9,
+                              color: leading
+                                ? colors.teamRowLeadingText
+                                : colors.teamRowText,
+                              fontFamily: '"Bricolage Grotesque"',
+                            }}
+                          >
+                            {teamLabel}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {/* Mini chart bars */}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-end",
+                        gap: 3,
+                        marginTop: 8,
+                        height: 40,
+                      }}
+                    >
+                      {[
+                        { h: 80, id: "bar-a" },
+                        { h: 60, id: "bar-b" },
+                        { h: 45, id: "bar-c" },
+                        { h: 90, id: "bar-d-leading" },
+                        { h: 55, id: "bar-e" },
+                      ].map(({ h, id }) => (
+                        <div
+                          key={id}
+                          style={{
+                            flex: 1,
+                            height: `${h}%`,
+                            background:
+                              id === "bar-d-leading"
+                                ? colors.chartBarLeading
+                                : colors.chartBarDefault,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
-
-      {/* Floating Add button */}
-      <div className="fixed bottom-8 right-8 z-30">
-        <motion.button
-          type="button"
-          onClick={() => setShowAddModal(true)}
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.97 }}
-          className="flex items-center gap-2 px-5 py-3 font-broadcast text-sm tracking-wider"
-          style={{
-            background:
-              "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
-            color: "oklch(0.08 0.025 265)",
-            boxShadow:
-              "0 0 30px oklch(0.78 0.165 85 / 0.4), 0 4px 20px oklch(0 0 0 / 0.5)",
-          }}
-        >
-          <Plus size={16} />
-          ADD PLAYER
-        </motion.button>
-      </div>
-
-      {/* Add modal */}
-      <AnimatePresence>
-        {showAddModal && (
-          <AddPlayerModal
-            onClose={() => setShowAddModal(false)}
-            onAdd={handleAddPlayer}
-          />
+          </motion.div>
         )}
       </AnimatePresence>
-    </>
+
+      {/* Colour groups */}
+      <div className="space-y-8">
+        {COLOR_GROUPS.map((group) => (
+          <div key={group.label} className="space-y-3">
+            <div
+              className="font-broadcast text-xs tracking-widest pb-1"
+              style={{
+                color: "oklch(0.55 0.02 90)",
+                borderBottom: "1px solid oklch(0.18 0.04 255)",
+              }}
+            >
+              {group.label}
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+              {group.fields.map(({ key, label }) => (
+                <div
+                  key={key}
+                  className="flex items-center gap-3 px-3 py-2"
+                  style={{
+                    background: "oklch(0.10 0.025 255)",
+                    border: "1px solid oklch(0.22 0.04 255 / 0.5)",
+                  }}
+                >
+                  {/* Colour swatch + native picker */}
+                  <div className="relative flex-shrink-0">
+                    <div
+                      style={{
+                        width: 32,
+                        height: 32,
+                        background: colors[key],
+                        border: "2px solid oklch(0.3 0.04 255)",
+                        cursor: "pointer",
+                      }}
+                    />
+                    <input
+                      type="color"
+                      value={
+                        colors[key].startsWith("#")
+                          ? colors[key].slice(0, 7)
+                          : "#888888"
+                      }
+                      onChange={(e) => set(key, e.target.value)}
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        opacity: 0,
+                        cursor: "pointer",
+                        width: "100%",
+                        height: "100%",
+                      }}
+                    />
+                  </div>
+                  {/* Label + hex input */}
+                  <div className="flex-1 min-w-0">
+                    <div
+                      className="font-broadcast tracking-wide text-xs truncate mb-1"
+                      style={{ color: "oklch(0.65 0.02 90)" }}
+                    >
+                      {label}
+                    </div>
+                    <input
+                      type="text"
+                      value={colors[key]}
+                      onChange={(e) => set(key, e.target.value)}
+                      className="w-full px-2 py-0.5 font-digital text-xs"
+                      style={{
+                        background: "oklch(0.13 0.03 255)",
+                        border: "1px solid oklch(0.22 0.05 255)",
+                        color: "oklch(0.75 0.02 90)",
+                        outline: "none",
+                      }}
+                      placeholder="#rrggbb or rgba(...)"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Save button */}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={save}
+          className="flex items-center gap-2 px-6 py-2 font-broadcast tracking-widest text-sm transition-all hover:opacity-90 active:scale-95"
+          style={{
+            background: saved
+              ? "oklch(0.55 0.15 140)"
+              : "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
+            color: "oklch(0.08 0.02 265)",
+            boxShadow: "0 0 20px oklch(0.78 0.165 85 / 0.25)",
+          }}
+        >
+          <Save size={14} />
+          {saved ? "SAVED!" : "SAVE COLOURS"}
+        </button>
+        {syncing && (
+          <span
+            className="flex items-center gap-1.5 text-xs font-broadcast tracking-wider"
+            style={{ color: "oklch(0.55 0.02 90)" }}
+          >
+            <Loader2 size={11} className="animate-spin" />
+            Syncing…
+          </span>
+        )}
+      </div>
+      <p
+        className="font-broadcast tracking-wide text-xs"
+        style={{ color: "oklch(0.4 0.02 90)" }}
+      >
+        Refresh /live after saving to see the updated colours.
+      </p>
+    </div>
   );
 }
 
-// ─── Main Settings Page ───────────────────────────────────────────────────────
+// ─── Not Authenticated view ────────────────────────────────────────────────────
+function NotAuthenticatedView() {
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center broadcast-overlay">
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            "radial-gradient(ellipse 60% 50% at 50% 50%, oklch(0.15 0.06 255 / 0.6) 0%, transparent 70%)",
+        }}
+      />
+      <div
+        className="relative z-10 text-center max-w-sm px-6 py-12"
+        style={{
+          background: "oklch(0.12 0.03 255 / 0.95)",
+          border: "1px solid oklch(0.78 0.165 85 / 0.3)",
+          boxShadow: "0 0 60px oklch(0.78 0.165 85 / 0.08)",
+        }}
+      >
+        <div
+          className="font-broadcast text-xl tracking-widest mb-3"
+          style={{ color: "oklch(0.78 0.165 85)" }}
+        >
+          ACCESS REQUIRED
+        </div>
+        <p className="text-sm mb-6" style={{ color: "oklch(0.45 0.02 90)" }}>
+          Please log in via the admin panel first.
+        </p>
+        <a
+          href="/admin"
+          className="inline-flex items-center gap-2 px-6 py-2.5 font-broadcast tracking-widest text-sm transition-all hover:opacity-90"
+          style={{
+            background:
+              "linear-gradient(135deg, oklch(0.78 0.165 85), oklch(0.65 0.14 75))",
+            color: "oklch(0.08 0.02 265)",
+            boxShadow: "0 0 20px oklch(0.78 0.165 85 / 0.25)",
+          }}
+        >
+          GO TO ADMIN
+        </a>
+      </div>
+    </div>
+  );
+}
 
+// ─── Main SettingsPage ────────────────────────────────────────────────────────
 export default function SettingsPage() {
-  const navigate = useNavigate();
-  const { actor, isFetching } = useActor();
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [players, setPlayers] = useState<Player[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<
-    "league" | "teams" | "players" | "live-layout"
-  >("league");
+  const [tab, setTab] = useState<Tab>("league");
+  // Read auth from localStorage on mount — NO automatic redirect (per spec)
+  const [authed] = useState(() => isAuthenticated());
 
-  // Auth guard
-  const isAuthed = sessionStorage.getItem("spl_admin_auth") === "true";
+  // If not authenticated, show a styled message with a link — DO NOT redirect
+  if (!authed) {
+    return <NotAuthenticatedView />;
+  }
 
-  useEffect(() => {
-    if (!isAuthed) {
-      navigate({ to: "/admin" });
-    }
-  }, [isAuthed, navigate]);
-
-  const fetchData = useCallback(async () => {
-    if (!actor) return;
-    try {
-      const [teamsData, playersData] = await Promise.all([
-        actor.getTeams(),
-        actor.getPlayers(),
-      ]);
-      setTeams(teamsData);
-      setPlayers(playersData);
-    } catch {
-      toast.error("Failed to load data");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [actor]);
-
-  useEffect(() => {
-    if (!actor || isFetching) return;
-    fetchData();
-  }, [actor, isFetching, fetchData]);
-
-  if (!isAuthed) return null;
-
-  const tabs = [
-    {
-      id: "league" as const,
-      label: "LEAGUE",
-      count: null,
-      icon: <Trophy size={13} />,
-    },
-    {
-      id: "teams" as const,
-      label: "TEAMS",
-      count: teams.length,
-      icon: <Users size={13} />,
-    },
-    {
-      id: "players" as const,
-      label: "PLAYERS",
-      count: players.length,
-      icon: <Edit3 size={13} />,
-    },
-    {
-      id: "live-layout" as const,
-      label: "LIVE LAYOUT",
-      count: null,
-      icon: <Monitor size={13} />,
-    },
+  const TABS: { id: Tab; label: string }[] = [
+    { id: "league", label: "LEAGUE" },
+    { id: "teams", label: "TEAMS" },
+    { id: "players", label: "PLAYERS" },
+    { id: "layout", label: "LIVE LAYOUT" },
+    { id: "colours", label: "COLOURS" },
   ];
 
   return (
-    <div className="min-h-screen bg-background pb-24">
-      {/* Sticky header */}
-      <header
-        className="sticky top-0 z-40 flex items-center justify-between px-6 py-3"
+    <div className="min-h-screen bg-background broadcast-overlay">
+      {/* Background */}
+      <div
+        className="fixed inset-0 pointer-events-none"
         style={{
-          background: "oklch(0.09 0.03 265 / 0.97)",
+          background:
+            "radial-gradient(ellipse 80% 60% at 50% 10%, oklch(0.14 0.05 255 / 0.6) 0%, transparent 70%)",
+        }}
+      />
+
+      {/* Header */}
+      <header
+        className="sticky top-0 z-20 flex items-center gap-4 px-5 py-3"
+        style={{
+          background: "oklch(0.09 0.025 255 / 0.95)",
           borderBottom: "1px solid oklch(0.78 0.165 85 / 0.2)",
           backdropFilter: "blur(12px)",
         }}
       >
-        <div className="flex items-center gap-4">
-          <button
-            type="button"
-            onClick={() => navigate({ to: "/admin" })}
-            className="flex items-center gap-1.5 text-sm transition-opacity hover:opacity-70"
-            style={{ color: "oklch(0.55 0.02 90)" }}
-          >
-            <ArrowLeft size={15} />
-            <span className="hidden sm:inline font-broadcast text-xs tracking-wider">
-              BACK
-            </span>
-          </button>
-          <div
-            className="h-4 w-px"
-            style={{ background: "oklch(0.22 0.04 265)" }}
-          />
-          <div className="flex items-center gap-2">
-            <Settings size={15} style={{ color: "oklch(0.78 0.165 85)" }} />
-            <span
-              className="font-broadcast text-base tracking-wider"
-              style={{ color: "oklch(0.78 0.165 85)" }}
-            >
-              SPL
-            </span>
-            <span className="text-xs" style={{ color: "oklch(0.45 0.02 90)" }}>
-              — Settings
-            </span>
-          </div>
-        </div>
-
-        {/* Tab switcher in header (desktop) */}
-        <div className="hidden sm:flex items-center gap-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-broadcast tracking-wider transition-all"
-              style={{
-                background:
-                  activeTab === tab.id
-                    ? "oklch(0.78 0.165 85 / 0.15)"
-                    : "transparent",
-                border:
-                  activeTab === tab.id
-                    ? "1px solid oklch(0.78 0.165 85 / 0.35)"
-                    : "1px solid transparent",
-                color:
-                  activeTab === tab.id
-                    ? "oklch(0.78 0.165 85)"
-                    : "oklch(0.45 0.02 90)",
-              }}
-            >
-              {tab.icon}
-              {tab.label}
-              {tab.count !== null && (
-                <span
-                  className="font-digital"
-                  style={{
-                    color:
-                      activeTab === tab.id
-                        ? "oklch(0.78 0.165 85 / 0.7)"
-                        : "oklch(0.35 0.02 90)",
-                  }}
-                >
-                  ({tab.count})
-                </span>
-              )}
-            </button>
-          ))}
+        <a
+          href="/admin"
+          className="flex items-center gap-2 font-broadcast tracking-wider text-sm transition-opacity hover:opacity-70"
+          style={{ color: "oklch(0.55 0.02 90)" }}
+        >
+          <ChevronLeft size={16} />
+          ADMIN
+        </a>
+        <div
+          className="font-broadcast text-lg tracking-widest"
+          style={{ color: "oklch(0.78 0.165 85)" }}
+        >
+          SETTINGS
         </div>
       </header>
 
-      {/* Mobile tab bar */}
-      <div
-        className="sm:hidden flex"
-        style={{ borderBottom: "1px solid oklch(0.22 0.04 265)" }}
-      >
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => setActiveTab(tab.id)}
-            className="flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-broadcast tracking-wider transition-all"
-            style={{
-              background:
-                activeTab === tab.id
-                  ? "oklch(0.78 0.165 85 / 0.08)"
-                  : "transparent",
-              borderBottom:
-                activeTab === tab.id
-                  ? "2px solid oklch(0.78 0.165 85)"
-                  : "2px solid transparent",
-              color:
-                activeTab === tab.id
-                  ? "oklch(0.78 0.165 85)"
-                  : "oklch(0.45 0.02 90)",
-            }}
-          >
-            {tab.icon}
-            {tab.label}
-            {tab.count !== null && ` (${tab.count})`}
-          </button>
-        ))}
-      </div>
+      <div className="relative z-10 flex flex-col md:flex-row min-h-[calc(100vh-57px)]">
+        {/* Mobile: horizontal scrollable tabs */}
+        <nav
+          className="md:hidden flex overflow-x-auto gap-1 px-3 py-2 flex-shrink-0"
+          style={{ borderBottom: "1px solid oklch(0.18 0.04 255 / 0.6)" }}
+        >
+          {TABS.map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className="flex-shrink-0 px-3 py-2 font-broadcast tracking-widest text-xs transition-all rounded"
+              style={{
+                background:
+                  tab === id ? "oklch(0.78 0.165 85 / 0.15)" : "transparent",
+                borderBottom:
+                  tab === id
+                    ? "2px solid oklch(0.78 0.165 85)"
+                    : "2px solid transparent",
+                color:
+                  tab === id ? "oklch(0.88 0.16 82)" : "oklch(0.45 0.02 90)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
 
-      {/* Content */}
-      <main className="max-w-7xl mx-auto px-4 py-6">
-        {activeTab === "league" ? (
-          <motion.div
-            key="league"
-            initial={{ opacity: 0, x: -8 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 8 }}
-            transition={{ duration: 0.18 }}
-          >
-            <LeagueTab />
-          </motion.div>
-        ) : activeTab === "live-layout" ? (
-          <motion.div
-            key="live-layout"
-            initial={{ opacity: 0, x: 8 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -8 }}
-            transition={{ duration: 0.18 }}
-          >
-            <LiveLayoutTab />
-          </motion.div>
-        ) : isLoading ? (
-          <div className="space-y-3">
-            {[1, 2, 3, 4].map((i) => (
-              <div
-                key={i}
-                className="h-24 shimmer"
-                style={{ opacity: 1 - i * 0.15 }}
-              />
-            ))}
-          </div>
-        ) : (
+        {/* Desktop: vertical sidebar */}
+        <nav
+          className="hidden md:block w-44 flex-shrink-0 pt-4 px-2"
+          style={{ borderRight: "1px solid oklch(0.18 0.04 255 / 0.6)" }}
+        >
+          {TABS.map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className="w-full text-left px-3 py-2.5 mb-1 font-broadcast tracking-widest text-xs transition-all"
+              style={{
+                background:
+                  tab === id ? "oklch(0.78 0.165 85 / 0.12)" : "transparent",
+                borderLeft:
+                  tab === id
+                    ? "2px solid oklch(0.78 0.165 85)"
+                    : "2px solid transparent",
+                color:
+                  tab === id ? "oklch(0.88 0.16 82)" : "oklch(0.45 0.02 90)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        {/* Content */}
+        <main className="flex-1 p-4 md:p-6 overflow-y-auto">
           <AnimatePresence mode="wait">
-            {activeTab === "teams" ? (
-              <motion.div
-                key="teams"
-                initial={{ opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 8 }}
-                transition={{ duration: 0.18 }}
-              >
-                <TeamsTab teams={teams} onRefresh={fetchData} />
-              </motion.div>
-            ) : (
-              <motion.div
-                key="players"
-                initial={{ opacity: 0, x: 8 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -8 }}
-                transition={{ duration: 0.18 }}
-              >
-                <PlayersTab players={players} onRefresh={fetchData} />
-              </motion.div>
-            )}
+            <motion.div
+              key={tab}
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -10 }}
+              transition={{ duration: 0.2 }}
+            >
+              {tab === "league" && <LeagueTab />}
+              {tab === "teams" && <TeamsTab />}
+              {tab === "players" && <PlayersTab />}
+              {tab === "layout" && <LiveLayoutTab />}
+              {tab === "colours" && <LiveColoursTab />}
+            </motion.div>
           </AnimatePresence>
-        )}
-      </main>
+        </main>
+      </div>
     </div>
   );
 }

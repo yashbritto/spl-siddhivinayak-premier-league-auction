@@ -10,60 +10,113 @@ import type { ActorMethod } from '@icp-sdk/core/agent';
 import type { IDL } from '@icp-sdk/core/candid';
 import type { Principal } from '@icp-sdk/core/principal';
 
+export type Amount = bigint;
 export interface AuctionState {
-  'current_player_id' : [] | [bigint],
-  'current_bid' : bigint,
-  'leading_team_id' : [] | [bigint],
-  'is_active' : boolean,
+  'currentPlayerId' : [] | [PlayerId],
+  'leadingTeamId' : [] | [TeamId],
+  'isActive' : boolean,
+  'currentBid' : Amount,
 }
+export type Category = { 'bowler' : null } |
+  { 'allrounder' : null } |
+  { 'batsman' : null };
 export interface Dashboard {
-  'total_spent' : bigint,
-  'remaining_players' : bigint,
-  'most_expensive_player' : [] | [Player],
-  'sold_players' : bigint,
+  'remainingPlayers' : bigint,
+  'unsoldPlayers' : bigint,
+  'totalSpent' : Amount,
+  'mostExpensivePlayer' : [] | [Player],
+  'soldPlayers' : bigint,
 }
+export type ExternalBlob = Uint8Array;
 export interface Player {
-  'id' : bigint,
-  'status' : string,
-  'image_url' : string,
+  'id' : PlayerId,
+  'status' : Status,
+  'soldTo' : [] | [TeamId],
   'name' : string,
-  'base_price' : bigint,
-  'sold_to' : [] | [bigint],
-  'category' : string,
-  'rating' : bigint,
-  'sold_price' : [] | [bigint],
+  'soldPrice' : [] | [Amount],
+  'imageUrl' : string,
+  'category' : Category,
+  'rating' : Rating,
+  'basePrice' : Amount,
 }
+export type PlayerId = bigint;
+export interface PlayerWithTeam { 'player' : Player, 'team' : [] | [Team] }
+export type Rating = bigint;
 export type Result = { 'ok' : null } |
   { 'err' : string };
+export type Status = { 'upcoming' : null } |
+  { 'live' : null } |
+  { 'sold' : null } |
+  { 'unsold' : null };
 export interface Team {
-  'id' : bigint,
+  'id' : TeamId,
+  'purseAmountLeft' : Amount,
+  'teamIconPlayer' : string,
+  'teamLogo' : TeamLogo,
+  'isTeamLocked' : boolean,
+  'ownerName' : string,
   'name' : string,
-  'purse_total' : bigint,
-  'icon_player_name' : string,
-  'purse_remaining' : bigint,
-  'players_bought' : bigint,
-  'owner_name' : string,
-  'is_locked' : boolean,
+  'purseAmountTotal' : Amount,
+  'numberOfPlayers' : bigint,
+}
+export type TeamId = bigint;
+export type TeamLogo = [] | [ExternalBlob];
+export interface _CaffeineStorageCreateCertificateResult {
+  'method' : string,
+  'blob_hash' : string,
+}
+export interface _CaffeineStorageRefillInformation {
+  'proposed_top_up_amount' : [] | [bigint],
+}
+export interface _CaffeineStorageRefillResult {
+  'success' : [] | [boolean],
+  'topped_up_amount' : [] | [bigint],
 }
 export interface _SERVICE {
-  'addPlayer' : ActorMethod<[string, string, bigint, string, bigint], Result>,
+  '_caffeineStorageBlobIsLive' : ActorMethod<[Uint8Array], boolean>,
+  '_caffeineStorageBlobsToDelete' : ActorMethod<[], Array<Uint8Array>>,
+  '_caffeineStorageConfirmBlobDeletion' : ActorMethod<
+    [Array<Uint8Array>],
+    undefined
+  >,
+  '_caffeineStorageCreateCertificate' : ActorMethod<
+    [string],
+    _CaffeineStorageCreateCertificateResult
+  >,
+  '_caffeineStorageRefillCashier' : ActorMethod<
+    [[] | [_CaffeineStorageRefillInformation]],
+    _CaffeineStorageRefillResult
+  >,
+  '_caffeineStorageUpdateGatewayPrincipals' : ActorMethod<[], undefined>,
+  'addPlayer' : ActorMethod<[string, Category, Amount, string, Rating], Result>,
   'adminLogin' : ActorMethod<[string], boolean>,
-  'deletePlayer' : ActorMethod<[bigint], Result>,
-  'editTeamPurse' : ActorMethod<[bigint, bigint], Result>,
+  'deletePlayer' : ActorMethod<[PlayerId], Result>,
+  'editTeamPurse' : ActorMethod<[TeamId, Amount], Result>,
   'getAuctionState' : ActorMethod<[], AuctionState>,
   'getDashboard' : ActorMethod<[], Dashboard>,
+  'getPlayerById' : ActorMethod<[PlayerId], [] | [Player]>,
   'getPlayers' : ActorMethod<[], Array<Player>>,
-  'getResults' : ActorMethod<[], Array<[Player, [] | [Team]]>>,
+  'getPlayersByCategory' : ActorMethod<[Category], Array<Player>>,
+  'getRemainingPurse' : ActorMethod<[TeamId], [] | [Amount]>,
+  'getResults' : ActorMethod<[], Array<PlayerWithTeam>>,
+  'getSettings' : ActorMethod<[], string>,
+  'getTeamById' : ActorMethod<[TeamId], [] | [Team]>,
   'getTeams' : ActorMethod<[], Array<Team>>,
-  'placeBid' : ActorMethod<[bigint], Result>,
+  'initialize' : ActorMethod<[], boolean>,
+  'markPlayerUnsold' : ActorMethod<[], Result>,
+  'placeBid' : ActorMethod<[TeamId], Result>,
+  'putPlayerBackToAuction' : ActorMethod<[PlayerId], Result>,
   'resetAuction' : ActorMethod<[], undefined>,
-  'selectPlayer' : ActorMethod<[bigint], Result>,
+  'saveSettings' : ActorMethod<[string], undefined>,
+  'selectPlayer' : ActorMethod<[PlayerId], Result>,
   'sellPlayer' : ActorMethod<[], Result>,
+  'unsellPlayer' : ActorMethod<[PlayerId], Result>,
   'updatePlayer' : ActorMethod<
-    [bigint, string, string, bigint, string, bigint],
+    [PlayerId, string, Category, Amount, string, Rating],
     Result
   >,
-  'updateTeam' : ActorMethod<[bigint, string, string, string], Result>,
+  'updateTeam' : ActorMethod<[TeamId, string, string, string], Result>,
+  'uploadTeamLogo' : ActorMethod<[TeamId, ExternalBlob], Result>,
 }
 export declare const idlService: IDL.ServiceClass;
 export declare const idlInitArgs: IDL.Type[];

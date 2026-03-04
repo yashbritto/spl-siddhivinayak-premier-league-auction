@@ -45,7 +45,7 @@ export function TeamPurseChart({ teams, leadingTeamId }: TeamPurseChartProps) {
   const data = teams.map((team) => ({
     name: team.name.length > 10 ? `${team.name.substring(0, 10)}…` : team.name,
     fullName: team.name,
-    purse: Number(team.purse_remaining),
+    purse: Number(team.purseAmountLeft),
     id: Number(team.id),
   }));
 

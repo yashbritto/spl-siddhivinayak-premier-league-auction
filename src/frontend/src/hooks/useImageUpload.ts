@@ -12,23 +12,13 @@ export function useImageUpload() {
   });
 
   const uploadImage = useCallback(async (file: File): Promise<string> => {
+    if (!file.type.startsWith("image/")) {
+      throw new Error("File must be an image");
+    }
+
     setState({ isUploading: true, progress: 10 });
 
     return new Promise((resolve, reject) => {
-      // Validate file type
-      if (!file.type.startsWith("image/")) {
-        setState({ isUploading: false, progress: 0 });
-        reject(new Error("File must be an image"));
-        return;
-      }
-
-      // Warn if file is very large (>2MB)
-      if (file.size > 2 * 1024 * 1024) {
-        console.warn(
-          "Image is larger than 2MB — consider compressing it first.",
-        );
-      }
-
       const reader = new FileReader();
 
       reader.onprogress = (event) => {
@@ -52,5 +42,13 @@ export function useImageUpload() {
     });
   }, []);
 
-  return { uploadImage, ...state };
+  // Alias: `upload` for convenience
+  const upload = uploadImage;
+
+  return {
+    uploadImage,
+    upload,
+    isUploading: state.isUploading,
+    progress: state.progress,
+  };
 }
